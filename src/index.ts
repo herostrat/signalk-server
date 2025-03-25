@@ -70,6 +70,7 @@ import { Zones } from './zones'
 import checkNodeVersion from './version'
 import helmet from 'helmet'
 const debug = createDebug('signalk-server')
+import logging from './logging'
 
 import { StreamBundle } from './streambundle'
 
@@ -123,7 +124,7 @@ class Server {
       app.set('trust proxy', app.config.settings.trustProxy)
     }
 
-    app.logging = require('./logging')(app)
+    app.logging = logging(app)
     app.version = '0.0.1'
 
     setupCors(app, getSecurityConfig(app))
