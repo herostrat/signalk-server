@@ -11,6 +11,6 @@ fs.readdirSync(`${__dirname}/`).forEach((file) => {
     file !== 'index.ts'
   ) {
     const name = file.replace(/\.(js|ts)$/, '')
-    interfaceExports[name] = require('./' + file)
+    interfaceExports[name] = require('./' + name)
   }
 })
