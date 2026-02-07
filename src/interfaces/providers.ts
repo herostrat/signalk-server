@@ -13,13 +13,76 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
 */
-const _ = require('lodash')
-const config = require('../config/config')
-const { runDiscovery } = require('../discovery')
-import { SERVERROUTESPREFIX } from '../constants'
 
-module.exports = function (app) {
-  app.on('discovered', (provider) => {
+import { EventEmitter } from 'events'
+import _ from 'lodash'
+
+import { writeSettingsFile } from '../config/config'
+import { SERVERROUTESPREFIX } from '../constants'
+import { runDiscovery } from '../discovery'
+
+type ProviderPipeOptions = {
+  logging?: boolean
+  type?: string
+  subOptions?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+type ProviderPipeElement = {
+  type: string
+  options: ProviderPipeOptions
+}
+
+type ProviderConfig = {
+  id: string
+  enabled?: boolean
+  pipeElements: ProviderPipeElement[]
+}
+
+type IncomingProviderOptions = Record<string, unknown> & {
+  type?: string
+  uniqueNumber?: string | number
+  mfgCode?: string | number
+}
+
+type IncomingProvider = {
+  id?: string
+  enabled?: boolean
+  type?: string
+  logging?: boolean
+  options?: IncomingProviderOptions
+  wasDiscovered?: boolean
+  originalId?: string
+}
+
+type RequestLike = {
+  params: Record<string, string>
+  body: IncomingProvider
+}
+
+type ResponseLike = {
+  status: (code: number) => ResponseLike
+  send: (payload?: unknown) => ResponseLike
+  json: (payload: unknown) => ResponseLike
+  type: (value: string) => ResponseLike
+}
+
+type Handler = (req: RequestLike, res: ResponseLike) => void
+
+type AppLike = EventEmitter & {
+  config: { settings: { pipedProviders: ProviderConfig[] } }
+  discoveredProviders: ProviderConfig[]
+  get: (path: string, handler: Handler) => void
+  put: (path: string, handler: Handler) => void
+  post: (path: string, handler: Handler) => void
+  delete: (path: string, handler: Handler) => void
+}
+
+type DiscoveryApp = Parameters<typeof runDiscovery>[0]
+type ConfigApp = Parameters<typeof writeSettingsFile>[0]
+
+const providers = (app: AppLike) => {
+  app.on('discovered', (provider: ProviderConfig) => {
     app.discoveredProviders.push(provider)
     app.emit('serverevent', {
       type: 'DISCOVERY_CHANGED',
@@ -28,24 +91,24 @@ module.exports = function (app) {
     })
   })
 
-  app.get(`${SERVERROUTESPREFIX}/providers`, (req, res) => {
+  app.get(`${SERVERROUTESPREFIX}/providers`, (_req, res) => {
     res.json(getProviders(app.config.settings.pipedProviders))
   })
 
-  app.put(`${SERVERROUTESPREFIX}/runDiscovery`, (req, res) => {
+  app.put(`${SERVERROUTESPREFIX}/runDiscovery`, (_req, res) => {
     app.discoveredProviders = []
-    runDiscovery(app)
+    runDiscovery(app as unknown as DiscoveryApp)
     res.json('Discovery started')
   })
 
-  function getProviders(source, wasDiscovered) {
+  const getProviders = (source: ProviderConfig[], wasDiscovered?: boolean) => {
     return source.map((provider) => {
       const type = provider.pipeElements[0].type
-      let providerRes
+      let providerRes: Record<string, unknown>
       if (type === 'providers/simple' && provider.pipeElements.length === 1) {
         providerRes = JSON.parse(
           JSON.stringify(provider.pipeElements[0].options)
-        )
+        ) as Record<string, unknown>
         providerRes.id = provider.id
         providerRes.enabled = provider.enabled
         providerRes.options = providerRes.subOptions
@@ -86,18 +149,26 @@ module.exports = function (app) {
     }
     app.config.settings.pipedProviders.splice(idx, 1)
 
-    config.writeSettingsFile(app, app.config.settings, (err) => {
-      if (err) {
-        console.error(err)
-        res.status(500).send('Unable to save to settings file')
-      } else {
-        res.type('text/plain')
-        res.send('Connection deleted')
+    writeSettingsFile(
+      app as unknown as ConfigApp,
+      app.config.settings,
+      (err?: Error) => {
+        if (err) {
+          console.error(err)
+          res.status(500).send('Unable to save to settings file')
+        } else {
+          res.type('text/plain')
+          res.send('Connection deleted')
+        }
       }
-    })
+    )
   })
 
-  function updateProvider(idToUpdate, provider, res) {
+  function updateProvider(
+    idToUpdate: string | null,
+    provider: IncomingProvider,
+    res: ResponseLike
+  ) {
     const isNew = _.isUndefined(idToUpdate) || idToUpdate === null
     const existing = app.config.settings.pipedProviders.find(
       (p) => p.id === (isNew ? provider.id : idToUpdate)
@@ -134,28 +205,36 @@ module.exports = function (app) {
       })
     }
 
-    const updatedProvider = existing || {
-      pipeElements: [
-        {
-          type: 'providers/simple',
-          options: {}
-        }
-      ]
+    const updatedProvider =
+      existing ||
+      ({
+        pipeElements: [
+          {
+            type: 'providers/simple',
+            options: {}
+          }
+        ]
+      } as ProviderConfig)
+
+    if (!provider.options) {
+      provider.options = {}
     }
 
     if (provider.options.type === 'canbus-canboatjs') {
-      const uniqueNumber = parseInt(provider.options.uniqueNumber, 10)
-      if (!isNaN(uniqueNumber)) {
+      const uniqueNumber = parseInt(String(provider.options.uniqueNumber), 10)
+      if (!Number.isNaN(uniqueNumber)) {
         provider.options.uniqueNumber = uniqueNumber
       } else {
         provider.options.uniqueNumber = Math.floor(Math.random() * 2097151)
       }
 
-      const mfgCode = parseInt(provider.options.mfgCode, 10)
-      if (!isNaN(mfgCode)) {
+      const mfgCode = parseInt(String(provider.options.mfgCode), 10)
+      if (!Number.isNaN(mfgCode)) {
         provider.options.mfgCode = mfgCode
       } else {
-        if (provider.options.mfgCode !== '') delete provider.options.mfgCode //if value is not empty or not a number then removing property
+        if (provider.options.mfgCode !== '') {
+          delete provider.options.mfgCode
+        }
       }
     }
 
@@ -164,20 +243,28 @@ module.exports = function (app) {
         app.config.settings.pipedProviders.push(updatedProvider)
       }
 
-      config.writeSettingsFile(app, app.config.settings, (err) => {
-        if (err) {
-          console.error(err)
-          res.status(500).send('Unable to save to settings file')
-        } else {
-          res.type('text/plain')
-          res.send('Connection ' + (isNew ? 'added' : 'updated'))
+      writeSettingsFile(
+        app as unknown as ConfigApp,
+        app.config.settings,
+        (err?: Error) => {
+          if (err) {
+            console.error(err)
+            res.status(500).send('Unable to save to settings file')
+          } else {
+            res.type('text/plain')
+            res.send('Connection ' + (isNew ? 'added' : 'updated'))
+          }
         }
-      })
+      )
     }
   }
 }
 
-function applyProviderSettings(target, source, res) {
+function applyProviderSettings(
+  target: ProviderConfig,
+  source: IncomingProvider,
+  res: ResponseLike
+) {
   if (source.type === 'Unknown') {
     res.status(401).send('Can not update an Unknown type')
     return false
@@ -185,12 +272,15 @@ function applyProviderSettings(target, source, res) {
 
   const options = target.pipeElements[0].options
 
-  target.id = source.id
+  target.id = source.id || target.id
   target.enabled = source.enabled
   options.logging = source.logging
   options.type = source.type
 
-  if (!options.subOptions || options.subOptions.type !== source.options.type) {
+  if (
+    !options.subOptions ||
+    options.subOptions.type !== (source.options || {}).type
+  ) {
     options.subOptions = {}
   }
 
@@ -198,3 +288,5 @@ function applyProviderSettings(target, source, res) {
 
   return true
 }
+
+export = providers

@@ -53,10 +53,10 @@ import { listAllSerialPorts } from './serialports'
 import { StreamBundle } from './streambundle'
 import { WithWrappedEmitter } from './events'
 import { getAISShipTypeName } from '@signalk/signalk-schema'
-import availableInterfaces from './interfaces'
+import * as availableInterfaces from './interfaces'
 import redirects from './redirects.json'
 import rateLimit from 'express-rate-limit'
-
+import { Logging } from './logging'
 const readdir = util.promisify(fs.readdir)
 const debug = createDebug('signalk-server:serverroutes')
 const ncp = ncpI.ncp
@@ -131,12 +131,7 @@ interface App
     PluginManager,
     WithWrappedEmitter {
   webapps: Package[]
-  logging: {
-    rememberDebug: (r: boolean) => void
-    enableDebug: (r: string) => boolean
-    addDebug: (name: string) => void
-    removeDebug: (name: string) => void
-  }
+  logging: Logging
   activateSourcePriorities: () => void
   streambundle: StreamBundle
 }

@@ -6,31 +6,47 @@
  * You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
-
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
-*/
+ */
 
-const { isUndefined } = require('lodash')
+import errorhandler from 'errorhandler'
+import { isUndefined } from 'lodash'
+import morgan from 'morgan'
 
-module.exports = function (app) {
-  'use strict'
+type AppLike = {
+  config: {
+    environment?: string
+    settings: { accessLogging?: boolean }
+  }
+  get: (key: string) => string
+  use: (middleware: unknown) => void
+}
 
-  if (app.get('env') === 'production') {
-    app.config.environment = 'production'
-    app.config.debug = false
+const development = (app: AppLike) => {
+  if (app.get('env') === 'development') {
+    app.config.environment = 'development'
 
-    const morganOptions = {}
+    app.use(
+      errorhandler({
+        dumpExceptions: true,
+        showStack: true
+      })
+    )
+
+    const morganOptions: { skip?: () => boolean } = {}
     const accessLogging =
       isUndefined(app.config.settings.accessLogging) ||
       app.config.settings.accessLogging
     if (!accessLogging) {
       morganOptions.skip = () => true
     }
-    app.use(require('morgan')('combined', morganOptions))
-    app.use(require('errorhandler')())
+    app.use(morgan('dev', morganOptions))
   }
 }
+
+export = development

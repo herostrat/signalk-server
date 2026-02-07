@@ -218,6 +218,9 @@ export interface SecurityStrategy {
   ) => boolean
 
   addAdminMiddleware: (path: string) => void
+  addAdminWriteMiddleware: (path: string) => void
+  addWriteMiddleware: (path: string) => void
+  canAuthorizeWS: () => boolean
 
   /** Update OIDC config in memory (optional - only available when token security is active) */
   updateOIDCConfig?: (newOidcConfig: PartialOIDCConfig) => void
@@ -437,4 +440,16 @@ export function getRateLimitValidationOptions(app: WithConfig) {
     app.config.settings.trustProxy !== 'false'
     ? { xForwardedForHeader: false, trustProxy: false }
     : undefined
+}
+
+export type Principal = {
+  identifier: string
+  permissions: 'admin' | 'readonly' | 'readwrite'
+}
+
+// Add skPrincipal to the Request interface
+declare module 'express-serve-static-core' {
+  interface Request {
+    skPrincipal?: Principal
+  }
 }

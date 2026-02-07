@@ -6,7 +6,8 @@ import os from 'os'
 import path from 'path'
 
 const require = createRequire(import.meta.url)
-const createLogger = require('../../src/logging')
+const loggingModule = require('../../src/logging')
+const createLogger = loggingModule.default ?? loggingModule
 
 describe('logging', () => {
   let tempDir: string

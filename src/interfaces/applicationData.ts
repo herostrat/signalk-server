@@ -14,26 +14,32 @@
  * limitations under the License.
  */
 
-const _ = require('lodash')
+import _ from 'lodash'
 import { createDebug } from '../debug'
 const debug = createDebug('signalk-server:interfaces:applicationData')
-const fs = require('fs')
-const path = require('path')
-const jsonpatch = require('json-patch')
-const semver = require('semver')
+import fs from 'fs/promises'
+import path from 'path'
+import jsonpatch from 'json-patch'
+import semver from 'semver'
+import { ServerApp } from '../app'
+import { Request, Response } from 'express'
 
 const prefix = '/signalk/v1/applicationData'
 
 const DANGEROUS_PATH_SEGMENTS = ['__proto__', 'constructor', 'prototype']
 
-function isPrototypePollutionPath(pathString) {
+function isPrototypePollutionPath(pathString: string): boolean {
   const segments = pathString.split(/[./]/)
   return segments.some((seg) => DANGEROUS_PATH_SEGMENTS.includes(seg))
 }
 
-function hasPrototypePollutionPatch(patches) {
-  return patches.some(
-    (patch) => patch.path && isPrototypePollutionPath(patch.path)
+type JsonPatch = {
+  path?: string
+}
+
+function hasPrototypePollutionPatch(patches: JsonPatch[]): boolean {
+  return patches.some((patch) =>
+    patch.path ? isPrototypePollutionPath(patch.path) : false
   )
 }
 
@@ -47,7 +53,7 @@ const userApplicationDataUrls = [
   `${prefix}/user/:appid/:version`
 ]
 
-module.exports = function (app) {
+module.exports = function (app: ServerApp) {
   if (app.securityStrategy.isDummy()) {
     debug('ApplicationData disabled because security is off')
 
@@ -70,31 +76,31 @@ module.exports = function (app) {
     app.securityStrategy.addWriteMiddleware(url)
   })
 
-  app.get(userApplicationDataUrls, (req, res) => {
-    getApplicationData(req, res, true)
+  app.get(userApplicationDataUrls, async (req, res) => {
+    await getApplicationData(req, res, true)
   })
 
-  app.post(userApplicationDataUrls, (req, res) => {
-    postApplicationData(req, res, true)
+  app.post(userApplicationDataUrls, async (req, res) => {
+    await postApplicationData(req, res, true)
   })
 
-  app.get(applicationDataUrls, (req, res) => {
-    getApplicationData(req, res, false)
+  app.get(applicationDataUrls, async (req, res) => {
+    await getApplicationData(req, res, false)
   })
 
-  app.post(applicationDataUrls, (req, res) => {
-    postApplicationData(req, res, false)
+  app.post(applicationDataUrls, async (req, res) => {
+    await postApplicationData(req, res, false)
   })
 
-  app.get(`${prefix}/global/:appid`, (req, res) => {
-    listVersions(req, res, false)
+  app.get(`${prefix}/global/:appid`, async (req, res) => {
+    await listVersions(req, res, false)
   })
 
-  app.get(`${prefix}/user/:appid`, (req, res) => {
-    listVersions(req, res, true)
+  app.get(`${prefix}/user/:appid`, async (req, res) => {
+    await listVersions(req, res, true)
   })
 
-  function listVersions(req, res, isUser) {
+  async function listVersions(req: Request, res: Response, isUser: boolean) {
     const appid = validateAppId(req.params.appid)
 
     if (!appid) {
@@ -104,15 +110,20 @@ module.exports = function (app) {
 
     const dir = dirForApplicationData(req, appid, isUser)
 
-    if (!fs.existsSync(dir)) {
+    try {
+      const result = (await fs.readdir(dir)).map((file) => file.slice(0, -5))
+      res.json(result)
+    } catch (_) {
       res.sendStatus(404)
       return
     }
-
-    res.json(fs.readdirSync(dir).map((file) => file.slice(0, -5)))
   }
 
-  function getApplicationData(req, res, isUser) {
+  async function getApplicationData(
+    req: Request,
+    res: Response,
+    isUser: boolean
+  ) {
     const appid = validateAppId(req.params.appid)
     const version = validateVersion(req.params.version)
 
@@ -126,7 +137,12 @@ module.exports = function (app) {
       return
     }
 
-    let applicationData = readApplicationData(req, appid, version, isUser)
+    const applicationData = await readApplicationData(
+      req,
+      appid,
+      version,
+      isUser
+    )
 
     let data = applicationData
     if (req.params[0] && req.params[0].length !== 0) {
@@ -150,7 +166,11 @@ module.exports = function (app) {
     res.json(data)
   }
 
-  function postApplicationData(req, res, isUser) {
+  async function postApplicationData(
+    req: Request,
+    res: Response,
+    isUser: boolean
+  ) {
     const appid = validateAppId(req.params.appid)
     const version = validateVersion(req.params.version)
 
@@ -183,20 +203,24 @@ module.exports = function (app) {
       applicationData = req.body
     }
 
-    saveApplicationData(req, appid, version, isUser, applicationData, (err) => {
-      if (err) {
-        console.log(err)
-        res.status(500).send(err.message)
-      } else {
-        res.json('ApplicationData saved')
-      }
-    })
+    try {
+      await saveApplicationData(req, appid, version, isUser, applicationData)
+      res.json('ApplicationData saved')
+    } catch (err) {
+      console.log(err)
+      res.status(500).send(err)
+    }
   }
 
-  function readApplicationData(req, appid, version, isUser) {
+  async function readApplicationData(
+    req: Request,
+    appid: string,
+    version: string,
+    isUser: boolean
+  ) {
     let applicationDataString = '{}'
     try {
-      applicationDataString = fs.readFileSync(
+      applicationDataString = await fs.readFile(
         pathForApplicationData(req, appid, version, isUser),
         'utf8'
       )
@@ -204,20 +228,19 @@ module.exports = function (app) {
       debug('Could not find applicationData for %s %s', appid, version)
     }
     try {
-      const applicationData = JSON.parse(applicationDataString)
-      return applicationData
+      return JSON.parse(applicationDataString)
     } catch (e) {
-      let filePath = dirForApplicationData(req, appid, isUser)
+      const filePath = pathForApplicationData(req, appid, version, isUser)
       console.error(
         'Could not parse applicationData for "%s": %s',
         filePath,
-        e.message
+        (e as Error).message
       )
       return {}
     }
   }
 
-  function validateAppId(appid) {
+  function validateAppId(appid: string) {
     return appid.length < 30 &&
       appid.indexOf('/') === -1 &&
       appid.indexOf('\\') === -1
@@ -225,21 +248,26 @@ module.exports = function (app) {
       : null
   }
 
-  function validateVersion(version) {
+  function validateVersion(version: string) {
     return semver.valid(semver.coerce(version))
   }
 
-  function dirForApplicationData(req, appid, isUser) {
-    let location = path.join(
+  function dirForApplicationData(req: Request, appid: string, isUser: boolean) {
+    const location = path.join(
       app.config.configPath,
       'applicationData',
-      isUser ? `users/${req.skPrincipal.identifier}` : 'global'
+      isUser ? `users/${req.skPrincipal!.identifier}` : 'global'
     )
 
     return path.join(location, appid)
   }
 
-  function pathForApplicationData(req, appid, version, isUser) {
+  function pathForApplicationData(
+    req: Request,
+    appid: string,
+    version: string,
+    isUser: boolean
+  ) {
     const filePath = path.normalize(
       path.join(dirForApplicationData(req, appid, isUser), `${version}.json`)
     )
@@ -253,49 +281,21 @@ module.exports = function (app) {
     return filePath
   }
 
-  function saveApplicationData(req, appid, version, isUser, data, callback) {
-    const applicationDataDir = path.join(
-      app.config.configPath,
-      'applicationData'
-    )
-    const usersDir = path.join(applicationDataDir, 'users')
-    const globalDir = path.join(applicationDataDir, 'global')
+  async function saveApplicationData(
+    req: Request,
+    appid: string,
+    version: string,
+    isUser: boolean,
+    data: unknown
+  ) {
+    // Ensure directory exists
+    await fs.mkdir(dirForApplicationData(req, appid, isUser), {
+      recursive: true
+    })
 
-    try {
-      if (!fs.existsSync(applicationDataDir)) {
-        fs.mkdirSync(applicationDataDir)
-      }
-
-      if (isUser) {
-        if (!fs.existsSync(usersDir)) {
-          fs.mkdirSync(usersDir)
-        }
-        const userDir = path.join(usersDir, req.skPrincipal.identifier)
-        if (!fs.existsSync(userDir)) {
-          fs.mkdirSync(userDir)
-        }
-        const appDir = path.join(userDir, appid)
-        if (!fs.existsSync(appDir)) {
-          fs.mkdirSync(appDir)
-        }
-      } else {
-        if (!fs.existsSync(globalDir)) {
-          fs.mkdirSync(globalDir)
-        }
-        const appDir = path.join(globalDir, appid)
-        if (!fs.existsSync(appDir)) {
-          fs.mkdirSync(appDir)
-        }
-      }
-    } catch (err) {
-      callback(err)
-      return
-    }
-
-    fs.writeFile(
+    await fs.writeFile(
       pathForApplicationData(req, appid, version, isUser),
-      JSON.stringify(data, null, 2),
-      callback
+      JSON.stringify(data, null, 2)
     )
   }
 }

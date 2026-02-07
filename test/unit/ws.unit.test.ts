@@ -152,8 +152,13 @@ describe('ws interface', () => {
 
   beforeEach(() => {
     FakePrimus.instances = []
+    const requestResponseModule = require('../../src/requestResponse') as
+      | RequestResponseModule
+      | { default: RequestResponseModule }
     requestResponse =
-      require('../../src/requestResponse') as RequestResponseModule
+      'default' in requestResponseModule
+        ? requestResponseModule.default
+        : requestResponseModule
 
     app = Object.assign(new EventEmitter(), {
       server: {},

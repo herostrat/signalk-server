@@ -56,13 +56,12 @@ describe('logfiles', () => {
     return app
   }
 
-  const withMockedLogging = (
+  const withMockedLogging = async (
     logDir: string,
-    listFn: (
-      app: unknown,
-      cb: (err: Error | null, files?: string[]) => void
-    ) => void,
-    run: (logfiles: (app: LogfilesApp) => { start: () => void }) => void
+    listFn: (app: unknown) => Promise<string[]>,
+    run: (
+      logfiles: (app: LogfilesApp) => { start: () => void }
+    ) => void | Promise<void>
   ) => {
     const loggingPath = require.resolve('@signalk/streams/logging')
     const logfilesPath = require.resolve('../../src/interfaces/logfiles')
@@ -82,7 +81,7 @@ describe('logfiles', () => {
     const logfiles = require('../../src/interfaces/logfiles')
 
     try {
-      run(logfiles)
+      await run(logfiles)
     } finally {
       if (originalLogging) {
         require.cache[loggingPath] = originalLogging
@@ -101,17 +100,17 @@ describe('logfiles', () => {
     fs.rmSync(tempDir, { recursive: true, force: true })
   })
 
-  it('lists log files and handles list errors', () => {
+  it('lists log files and handles list errors', async () => {
     const app = makeApp()
 
     const originalError = console.error
     console.error = () => {}
 
     try {
-      withMockedLogging(
+      await withMockedLogging(
         tempDir,
-        (_app, cb) => cb(null, ['one.log']),
-        (logfiles) => {
+        async () => ['one.log'],
+        async (logfiles) => {
           logfiles(app).start()
 
           const handler = routes.get(`${SERVERROUTESPREFIX}/logfiles/`)
@@ -130,15 +129,17 @@ describe('logfiles', () => {
               return this
             }
           }
-          handler!({}, res)
+          await handler!({}, res)
           expect(res.body).to.deep.equal(['one.log'])
         }
       )
 
-      withMockedLogging(
+      await withMockedLogging(
         tempDir,
-        (_app, cb) => cb(new Error('fail')),
-        (logfiles) => {
+        async () => {
+          throw new Error('fail')
+        },
+        async (logfiles) => {
           logfiles(app).start()
 
           const handler = routes.get(`${SERVERROUTESPREFIX}/logfiles/`)
@@ -154,7 +155,7 @@ describe('logfiles', () => {
               return this
             }
           }
-          handler!({}, res)
+          await handler!({}, res)
           expect(res.statusCode).to.equal(500)
           expect(res.body).to.equal('Error reading logfiles list')
         }
