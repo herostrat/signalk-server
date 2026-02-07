@@ -980,7 +980,7 @@ describe('tokensecurity', () => {
         }
       )
 
-      expect(callbackError?.message).to.equal('Unkown status value')
+      expect(callbackError?.message).to.equal('Unknown status value')
     } finally {
       restore()
     }

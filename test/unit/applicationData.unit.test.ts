@@ -161,10 +161,18 @@ describe('applicationData interface', () => {
     expect(resPost.payload).to.equal('ApplicationData saved')
 
     const resGet = makeRes()
-    getRoutes['/signalk/v1/applicationData/global/:appid/:version'](
-      { params: { appid: 'app', version: '1.0.0' }, query: {} },
-      resGet
-    )
+    await new Promise<void>((resolve) => {
+      resGet.json = (payload: unknown) => {
+        resGet.payload = payload
+        resolve()
+        return resGet
+      }
+
+      getRoutes['/signalk/v1/applicationData/global/:appid/:version'](
+        { params: { appid: 'app', version: '1.0.0' }, query: {} },
+        resGet
+      )
+    })
     expect(resGet.payload).to.deep.equal({ value: 1 })
   })
 
@@ -173,10 +181,18 @@ describe('applicationData interface', () => {
     applicationData(app)
 
     const resMissing = makeRes()
-    getRoutes['/signalk/v1/applicationData/global/:appid'](
-      { params: { appid: 'app' } },
-      resMissing
-    )
+    await new Promise<void>((resolve) => {
+      resMissing.sendStatus = (code: number) => {
+        resMissing.statusCode = code
+        resolve()
+        return resMissing
+      }
+
+      getRoutes['/signalk/v1/applicationData/global/:appid'](
+        { params: { appid: 'app' } },
+        resMissing
+      )
+    })
     expect(resMissing.statusCode).to.equal(404)
 
     const resPost = makeRes()
@@ -197,10 +213,18 @@ describe('applicationData interface', () => {
     })
 
     const resList = makeRes()
-    getRoutes['/signalk/v1/applicationData/global/:appid'](
-      { params: { appid: 'app' } },
-      resList
-    )
+    await new Promise<void>((resolve) => {
+      resList.json = (payload: unknown) => {
+        resList.payload = payload
+        resolve()
+        return resList
+      }
+
+      getRoutes['/signalk/v1/applicationData/global/:appid'](
+        { params: { appid: 'app' } },
+        resList
+      )
+    })
     expect(resList.payload).to.deep.equal(['1.0.0'])
   })
 })

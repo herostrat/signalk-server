@@ -28,14 +28,18 @@ const prefix = '/signalk/v1/applicationData'
 
 const DANGEROUS_PATH_SEGMENTS = ['__proto__', 'constructor', 'prototype']
 
-function isPrototypePollutionPath(pathString) {
+function isPrototypePollutionPath(pathString: string): boolean {
   const segments = pathString.split(/[./]/)
   return segments.some((seg) => DANGEROUS_PATH_SEGMENTS.includes(seg))
 }
 
-function hasPrototypePollutionPatch(patches) {
-  return patches.some(
-    (patch) => patch.path && isPrototypePollutionPath(patch.path)
+type JsonPatch = {
+  path?: string
+}
+
+function hasPrototypePollutionPatch(patches: JsonPatch[]): boolean {
+  return patches.some((patch) =>
+    patch.path ? isPrototypePollutionPath(patch.path) : false
   )
 }
 
@@ -252,7 +256,7 @@ module.exports = function (app: ServerApp) {
     const location = path.join(
       app.config.configPath,
       'applicationData',
-      isUser ? `users/${req.skPrincipal.identifier}` : 'global'
+      isUser ? `users/${req.skPrincipal!.identifier}` : 'global'
     )
 
     return path.join(location, appid)

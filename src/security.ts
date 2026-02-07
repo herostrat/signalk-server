@@ -450,6 +450,6 @@ export type Principal = {
 // Add skPrincipal to the Request interface
 declare module 'express-serve-static-core' {
   interface Request {
-    skPrincipal: Principal
+    skPrincipal?: Principal
   }
 }

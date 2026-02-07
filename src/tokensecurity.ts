@@ -40,7 +40,8 @@ import {
   RequestStatusData,
   getRateLimitValidationOptions,
   ACL,
-  SecurityStrategy
+  SecurityStrategy,
+  Principal
 } from './security'
 // requestResponse is still CommonJS
 /* eslint-disable @typescript-eslint/no-require-imports */
@@ -97,14 +98,6 @@ interface SKRequest extends Request {
 }
 
 /**
- * Principal representing an authenticated user or device
- */
-interface Principal {
-  identifier: string
-  permissions: string
-}
-
-/**
  * JWT payload structure
  */
 interface JWTPayload {
@@ -138,6 +131,7 @@ interface CookieOptions {
  * Merged configuration options used at runtime
  */
 interface TokenSecurityOptions {
+  [key: string]: unknown
   allow_readonly: boolean
   expiration: string
   secretKey: string
@@ -730,7 +724,7 @@ function tokenSecurityFactory(
       saveSecurityConfig: (securityConfig, callback) =>
         saveSecurityConfig(
           app as unknown as Parameters<typeof saveSecurityConfig>[0],
-          securityConfig as SecurityConfig,
+          securityConfig as unknown as SecurityConfig,
           callback
         ),
       updateOIDCConfig
@@ -1491,7 +1485,7 @@ function tokenSecurityFactory(
       if (user) {
         principal = {
           identifier: user.username,
-          permissions: user.type
+          permissions: user.type as unknown as Principal['permissions']
         }
       }
     } else if (payload.device && options.devices) {
@@ -1501,7 +1495,7 @@ function tokenSecurityFactory(
       if (device) {
         principal = {
           identifier: device.clientId,
-          permissions: device.permissions
+          permissions: device.permissions as unknown as Principal['permissions']
         }
       }
     }
