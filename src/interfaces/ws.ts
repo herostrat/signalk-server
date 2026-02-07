@@ -13,27 +13,261 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-const _ = require('lodash')
-const ports = require('../ports')
-const cookie = require('cookie')
-const { getSourceId, getMetadata } = require('@signalk/signalk-schema')
-const { requestAccess, InvalidTokenError } = require('../security')
-const {
-  findRequest,
-  updateRequest,
-  queryRequest
-} = require('../requestResponse')
-const { putPath, deletePath } = require('../put')
-import { createDebug } from '../debug'
+
+import { EventEmitter } from 'events'
+import _ from 'lodash'
 import { JsonWebTokenError, TokenExpiredError } from 'jsonwebtoken'
+
+import { createDebug } from '../debug'
+import * as ports from '../ports'
+import { getSourceId, getMetadata } from '@signalk/signalk-schema'
+import { requestAccess, InvalidTokenError } from '../security'
+import { findRequest, updateRequest, queryRequest } from '../requestResponse'
+import { putPath, deletePath } from '../put'
 import { startEvents, startServerEvents } from '../events'
 import {
   accumulateLatestValue,
   buildFlushDeltas
 } from '../LatestValuesAccumulator'
+import type { WithConfig } from '../app'
+
+const cookie = require('cookie') as {
+  parse: (value: string) => Record<string, string>
+}
+
+type WsQuery = Record<string, string>
+
+type WsRequest = {
+  headers: Record<string, string | undefined>
+  cookies?: Record<string, string>
+  token?: string
+  skPrincipal?: { identifier: string }
+  source?: string
+  connection: { remoteAddress: string }
+  query: WsQuery
+  socket: {
+    bufferSize: number
+    on: (event: string, handler: () => void) => void
+  }
+}
+
+type DeltaValue = {
+  path: string
+  value: unknown
+}
+
+type DeltaUpdate = {
+  $source?: string
+  source?: unknown
+  timestamp?: string
+  values?: DeltaValue[]
+  meta?: Array<{ path: string; value: unknown }>
+}
+
+type SignalKDelta = {
+  context: string
+  updates?: DeltaUpdate[]
+  $backpressure?: { accumulated: number; duration: number }
+}
+
+type PutMessage = {
+  path: string
+  value?: unknown
+}
+
+type DeleteMessage = {
+  path: string
+}
+
+type WsMessage = {
+  token?: string
+  updates?: DeltaUpdate[]
+  subscribe?: unknown
+  unsubscribe?: unknown
+  accessRequest?: unknown
+  login?: { username: string; password: string }
+  put?: PutMessage
+  delete?: DeleteMessage
+  requestId?: string
+  query?: unknown
+  context?: string
+}
+
+type PutReply = {
+  requestId?: string
+  state: string
+  statusCode?: number
+  message?: string
+}
+
+type SecurityStrategy = {
+  canAuthorizeWS: () => boolean
+  authorizeWS?: (req: WsRequest) => void
+  filterReadDelta: (
+    principal: unknown,
+    delta: SignalKDelta
+  ) => SignalKDelta | null | undefined
+  shouldAllowWrite: (req: WsRequest, msg: WsMessage) => boolean
+  supportsLogin: () => boolean
+  login?: (
+    username: string,
+    password: string
+  ) => Promise<{ statusCode: number; token?: string }>
+  verifyWS: (req: WsRequest) => void
+}
+
+type HistoryOptions = {
+  startTime: Date
+  playbackRate?: string | number
+  subscribe?: unknown
+}
+
+type HistoryProvider = {
+  hasAnyData: (options: HistoryOptions, cb: (hasResults: boolean) => void) => void
+  streamHistory: (
+    spark: Spark,
+    options: HistoryOptions,
+    onChange: (delta: SignalKDelta) => void
+  ) => () => void
+}
+
+type SubscriptionManager = {
+  subscribe: (
+    msg: WsMessage,
+    unsubscribes: Array<() => void>,
+    send: (message: SignalKDelta) => void,
+    onDelta: (delta: SignalKDelta) => void,
+    principal: unknown
+  ) => void
+  unsubscribe: (msg: WsMessage, unsubscribes: Array<() => void>) => void
+}
+
+type AppLike = EventEmitter & {
+  server: unknown
+  config: {
+    settings: {
+      ssl: boolean
+      wsCompression?: boolean
+      maxSendBufferSize?: number
+      maxSendBufferCheckTime?: number
+      trustProxy?: boolean | string
+    }
+    maxSendBufferSize?: number
+    maxSendBufferCheckTime?: number
+  }
+  securityStrategy: SecurityStrategy
+  signalk: EventEmitter
+  deltaCache: {
+    getCachedDeltas: (
+      filter: (delta: SignalKDelta) => boolean,
+      principal: unknown
+    ) => SignalKDelta[]
+  }
+  subscriptionmanager: SubscriptionManager
+  logging: { getLog: () => unknown[] }
+  getHello: () => unknown
+  handleMessage: (source: string, msg: unknown) => void
+  setProviderError: (source: string, message: string) => void
+  selfContext: string
+  historyProvider?: HistoryProvider
+}
+
+type Accumulator = Parameters<typeof accumulateLatestValue>[0]
+
+type Spark = EventEmitter & {
+  id: string
+  query: WsQuery
+  request: WsRequest
+  sendMetaDeltas?: boolean
+  sentMetaData: Record<string, boolean>
+  backpressure: {
+    active: boolean
+    accumulator: Accumulator
+    since: number | null
+  }
+  logUnsubscribe?: () => void
+  onDisconnects: Array<() => void>
+  hasServerEvents?: boolean
+  isHistory?: boolean
+  bufferSizeExceeded?: number
+  skPendingAccessRequest?: boolean
+  write: (payload: unknown) => void
+  end: (payload?: unknown, options?: unknown) => void
+}
+
+type PrimusInstance = {
+  authorize: (handler: (req: WsRequest, cb: (error?: unknown) => void) => void) => void
+  on: (event: 'connection' | 'disconnection', handler: (spark: Spark) => void) => void
+  forEach: (handler: (spark: Spark) => void) => void
+  destroy: (opts: { close: boolean; timeout: number }) => void
+}
+
+type PrimusCtor = new (server: unknown, options: unknown) => PrimusInstance
+
+type AccessRequestResult = {
+  state: string
+  accessRequest?: { token?: string }
+}
+
+type RequestRecord = {
+  requestId: string
+  state: string
+}
+
+type RequestResponseApi = {
+  findRequest: (predicate: (req: RequestRecord) => boolean) => RequestRecord | undefined
+  updateRequest: (
+    requestId: string,
+    state: string,
+    reply: Partial<PutReply> & { statusCode?: number }
+  ) => Promise<PutReply>
+  queryRequest: (requestId: string) => Promise<PutReply>
+}
+
+type PutPath = (
+  app: AppLike,
+  context: string,
+  path: string,
+  put: PutMessage,
+  req: WsRequest,
+  requestId: string | undefined,
+  cb: (reply: PutReply) => void
+) => Promise<unknown>
+
+type DeletePath = (
+  app: AppLike,
+  context: string,
+  path: string,
+  req: WsRequest,
+  requestId: string | undefined,
+  cb: (reply: PutReply) => void
+) => Promise<unknown>
+
+const Primus = require('primus') as PrimusCtor
+
 const debug = createDebug('signalk-server:interfaces:ws')
 const debugConnection = createDebug('signalk-server:interfaces:ws:connections')
-const Primus = require('primus')
+
+const requestResponseApi = {
+  findRequest,
+  updateRequest,
+  queryRequest
+} as RequestResponseApi
+
+const { findRequest: findWsRequest, updateRequest: updateWsRequest, queryRequest: queryWsRequest } =
+  requestResponseApi
+
+const { putPath: putPathFn, deletePath: deletePathFn } = ({
+  putPath,
+  deletePath
+} as unknown) as { putPath: PutPath; deletePath: DeletePath }
+
+const requestAccessFn = (requestAccess as unknown) as (
+  app: AppLike,
+  msg: WsMessage,
+  ipAddress: string,
+  cb: (res: AccessRequestResult) => void
+) => Promise<AccessRequestResult>
 
 // Backpressure thresholds - enter at 512KB, exit at ~0 (near-empty buffer)
 // Draining fully before flush ensures user sees near-real-time data periodically
@@ -45,7 +279,7 @@ const BACKPRESSURE_EXIT_THRESHOLD = process.env.BACKPRESSURE_EXIT
   ? parseInt(process.env.BACKPRESSURE_EXIT, 10)
   : 1024
 
-module.exports = function (app) {
+const ws = (app: AppLike) => {
   'use strict'
 
   debug(
@@ -54,15 +288,34 @@ module.exports = function (app) {
     BACKPRESSURE_EXIT_THRESHOLD
   )
 
-  const api = {}
-  let primuses = []
-  const pathSources = {}
-
-  api.mdns = {
-    name: app.config.settings.ssl ? '_signalk-wss' : '_signalk-ws',
-    type: 'tcp',
-    port: ports.getExternalPort(app)
+  const api: {
+    mdns: { name: string; type: string; port: number | string }
+    numClients: () => number
+    canHandlePut: (path: string, source?: string) => boolean
+    handlePut: (
+      requestId: string,
+      context: string,
+      path: string,
+      source: string | undefined,
+      value: unknown
+    ) => Promise<PutReply>
+    start: () => void
+    stop: () => void
+  } = {
+    mdns: {
+      name: app.config.settings.ssl ? '_signalk-wss' : '_signalk-ws',
+      type: 'tcp',
+      port: ports.getExternalPort(app as unknown as WithConfig)
+    },
+    numClients: () => 0,
+    canHandlePut: () => false,
+    handlePut: () => Promise.resolve({ state: 'COMPLETED' }),
+    start: () => undefined,
+    stop: () => undefined
   }
+
+  let primuses: PrimusInstance[] = []
+  const pathSources: Record<string, Record<string, Spark>> = {}
 
   api.numClients = function () {
     let count = 0
@@ -76,20 +329,20 @@ module.exports = function (app) {
 
   api.canHandlePut = function (path, source) {
     const sources = pathSources[path]
-    return sources && (!source || sources[source])
+    return Boolean(sources && (!source || sources[source]))
   }
 
   api.handlePut = function (requestId, context, path, source, value) {
     return new Promise((resolve, reject) => {
       const sources = pathSources[path]
       if (sources) {
-        let spark
+        let spark: Spark | undefined
         if (source) {
           spark = sources[source]
         } else if (_.keys(sources).length === 1) {
           spark = _.values(sources)[0]
         } else {
-          updateRequest(requestId, 'COMPLETED', {
+          updateWsRequest(requestId, 'COMPLETED', {
             statusCode: 400,
             message:
               'there are multiple sources for the given path, but no source was specified in the request'
@@ -104,12 +357,12 @@ module.exports = function (app) {
           return
         }
 
-        const listener = (msg) => {
+        const listener = (msg: PutReply) => {
           if (msg.requestId === requestId) {
-            updateRequest(requestId, msg.state, msg)
+            updateWsRequest(requestId, msg.state, msg)
               .then((reply) => {
                 if (reply.state !== 'PENDING') {
-                  spark.removeListener('data', listener)
+                  spark?.removeListener('data', listener)
                 }
               })
               .catch(() => {
@@ -119,10 +372,10 @@ module.exports = function (app) {
         }
         spark.on('data', listener)
         setTimeout(() => {
-          const request = findRequest((r) => r.requestId === requestId)
+          const request = findWsRequest((r) => r.requestId === requestId)
           if (request && request.state === 'PENDING') {
-            spark.removeListener('data', listener)
-            updateRequest(requestId, 'COMPLETED', { statusCode: 504 })
+            spark?.removeListener('data', listener)
+            updateWsRequest(requestId, 'COMPLETED', { statusCode: 504 })
           }
         }, 60 * 1000)
 
@@ -132,7 +385,7 @@ module.exports = function (app) {
           put: [{ path: path, value: value }]
         })
 
-        updateRequest(requestId, 'PENDING', { statusCode: 202 })
+        updateWsRequest(requestId, 'PENDING', { statusCode: 202 })
           .then(resolve)
           .catch(reject)
       } else {
@@ -144,7 +397,7 @@ module.exports = function (app) {
   api.start = function () {
     debug('Starting Primus/WS interface')
 
-    let baseOptions = {
+    let baseOptions: Record<string, unknown> = {
       transformer: 'websockets',
       pingInterval: false
     }
@@ -183,7 +436,7 @@ module.exports = function (app) {
       }
 
       primus.on('connection', function (spark) {
-        let principalId
+        let principalId: string | undefined
         if (spark.request.skPrincipal) {
           principalId = spark.request.skPrincipal.identifier
         }
@@ -217,7 +470,7 @@ module.exports = function (app) {
           }
         })
 
-        let onChange = (delta) => {
+        let onChange = (delta: SignalKDelta) => {
           const filtered = app.securityStrategy.filterReadDelta(
             spark.request.skPrincipal,
             delta
@@ -247,7 +500,7 @@ module.exports = function (app) {
           assertBufferSize(spark)
         }
 
-        const unsubscribes = []
+        const unsubscribes: Array<() => void> = []
 
         if (primusOptions.isPlayback) {
           spark.on('data', () => {
@@ -255,56 +508,58 @@ module.exports = function (app) {
             spark.end('Playback does not support ws upstream messages')
           })
         } else {
-          spark.on('data', function (msg) {
+          spark.on('data', function (msg: Buffer) {
+            let parsed: WsMessage
             try {
-              msg = JSON.parse(msg.toString())
+              parsed = JSON.parse(msg.toString()) as WsMessage
             } catch (e) {
-              debug('Failed to parse message: ' + e.message)
+              const error = e as Error
+              debug('Failed to parse message: ' + error.message)
               return
             }
-            debug('<' + JSON.stringify(msg))
+            debug('<' + JSON.stringify(parsed))
 
             try {
-              if (msg.token) {
-                spark.request.token = msg.token
+              if (parsed.token) {
+                spark.request.token = parsed.token
               }
 
-              if (msg.updates) {
-                processUpdates(app, pathSources, spark, msg)
+              if (parsed.updates) {
+                processUpdates(app, pathSources, spark, parsed)
               }
 
-              if (msg.subscribe) {
+              if (parsed.subscribe) {
                 processSubscribe(
                   app,
                   unsubscribes,
                   spark,
                   assertBufferSize,
-                  msg
+                  parsed
                 )
               }
 
-              if (msg.unsubscribe) {
-                processUnsubscribe(app, unsubscribes, msg, onChange, spark)
+              if (parsed.unsubscribe) {
+                processUnsubscribe(app, unsubscribes, parsed, onChange, spark)
               }
 
-              if (msg.accessRequest) {
-                processAccessRequest(spark, msg)
+              if (parsed.accessRequest) {
+                processAccessRequest(spark, parsed)
               }
 
-              if (msg.login && app.securityStrategy.supportsLogin()) {
-                processLoginRequest(spark, msg)
+              if (parsed.login && app.securityStrategy.supportsLogin()) {
+                processLoginRequest(spark, parsed)
               }
 
-              if (msg.put) {
-                processPutRequest(spark, msg)
+              if (parsed.put) {
+                processPutRequest(spark, parsed)
               }
 
-              if (msg.delete) {
-                processDeleteRequest(spark, msg)
+              if (parsed.delete) {
+                processDeleteRequest(spark, parsed)
               }
 
-              if (msg.requestId && msg.query) {
-                processReuestQuery(spark, msg)
+              if (parsed.requestId && parsed.query) {
+                processReuestQuery(spark, parsed)
               }
             } catch (e) {
               console.error(e)
@@ -333,7 +588,7 @@ module.exports = function (app) {
 
         if (isSelfSubscription(spark.query)) {
           const realOnChange = onChange
-          onChange = function (msg) {
+          onChange = function (msg: SignalKDelta) {
             if (!msg.context || msg.context === app.selfContext) {
               realOnChange(msg)
             }
@@ -380,8 +635,11 @@ module.exports = function (app) {
     )
   }
 
-  function processReuestQuery(spark, msg) {
-    queryRequest(msg.requestId)
+  function processReuestQuery(spark: Spark, msg: WsMessage) {
+    if (!msg.requestId) {
+      return
+    }
+    queryWsRequest(msg.requestId)
       .then((reply) => {
         spark.write(reply)
       })
@@ -393,10 +651,13 @@ module.exports = function (app) {
       })
   }
 
-  function processPutRequest(spark, msg) {
-    putPath(
+  function processPutRequest(spark: Spark, msg: WsMessage) {
+    if (!msg.put) {
+      return
+    }
+    putPathFn(
       app,
-      msg.context,
+      msg.context || '',
       msg.put.path,
       msg.put,
       spark.request,
@@ -405,7 +666,7 @@ module.exports = function (app) {
         debug('sending put update %j', reply)
         spark.write(reply)
       }
-    ).catch((err) => {
+    ).catch((err: Error) => {
       console.error(err)
       spark.write({
         requestId: msg.requestId,
@@ -416,10 +677,13 @@ module.exports = function (app) {
     })
   }
 
-  function processDeleteRequest(spark, msg) {
-    deletePath(
+  function processDeleteRequest(spark: Spark, msg: WsMessage) {
+    if (!msg.delete) {
+      return
+    }
+    deletePathFn(
       app,
-      msg.context,
+      msg.context || '',
       msg.delete.path,
       spark.request,
       msg.requestId,
@@ -427,7 +691,7 @@ module.exports = function (app) {
         debug('sending put update %j', reply)
         spark.write(reply)
       }
-    ).catch((err) => {
+    ).catch((err: Error) => {
       console.error(err)
       spark.write({
         requestId: msg.requestId,
@@ -438,7 +702,7 @@ module.exports = function (app) {
     })
   }
 
-  function processAccessRequest(spark, msg) {
+  function processAccessRequest(spark: Spark, msg: WsMessage) {
     if (spark.skPendingAccessRequest) {
       spark.write({
         requestId: msg.requestId,
@@ -447,34 +711,37 @@ module.exports = function (app) {
         message: 'A request has already been submitted'
       })
     } else {
-      requestAccess(
-        app,
-        msg,
+      const forwardedFor = spark.request.headers['x-forwarded-for']
+      const remoteAddress = spark.request.connection.remoteAddress
+      const ipAddress =
         (app.config.settings.trustProxy &&
           app.config.settings.trustProxy !== 'false' &&
-          spark.request.headers['x-forwarded-for']) ||
-          spark.request.connection.remoteAddress,
-        (res) => {
-          if (res.state === 'COMPLETED') {
-            spark.skPendingAccessRequest = false
+          forwardedFor) ||
+        remoteAddress
 
-            if (res.accessRequest && res.accessRequest.token) {
-              spark.request.token = res.accessRequest.token
-              app.securityStrategy.authorizeWS(spark.request)
+      requestAccessFn(app, msg, ipAddress, (res) => {
+        if (res.state === 'COMPLETED') {
+          spark.skPendingAccessRequest = false
+
+          if (res.accessRequest && res.accessRequest.token) {
+            spark.request.token = res.accessRequest.token
+            app.securityStrategy.authorizeWS?.(spark.request)
+            if (spark.request.skPrincipal?.identifier) {
               spark.request.source =
-                'ws.' + spark.request.skPrincipal.identifier.replace(/\./g, '_')
+                'ws.' +
+                spark.request.skPrincipal.identifier.replace(/\./g, '_')
             }
           }
-          spark.write(res)
         }
-      )
+        spark.write(res)
+      })
         .then((res) => {
           if (res.state === 'PENDING') {
             spark.skPendingAccessRequest = true
           }
           // nothing, callback above will get called
         })
-        .catch((err) => {
+        .catch((err: Error) => {
           console.log(err.stack)
           spark.write({
             requestId: msg.requestId,
@@ -486,13 +753,16 @@ module.exports = function (app) {
     }
   }
 
-  function processLoginRequest(spark, msg) {
-    app.securityStrategy
-      .login(msg.login.username, msg.login.password)
+  function processLoginRequest(spark: Spark, msg: WsMessage) {
+    const login = app.securityStrategy.login
+    if (!login || !msg.login) {
+      return
+    }
+    login(msg.login.username, msg.login.password)
       .then((reply) => {
         if (reply.token) {
           spark.request.token = reply.token
-          app.securityStrategy.authorizeWS(spark.request)
+          app.securityStrategy.authorizeWS?.(spark.request)
         }
         spark.write({
           requestId: msg.requestId,
@@ -503,7 +773,7 @@ module.exports = function (app) {
           }
         })
       })
-      .catch((err) => {
+      .catch((err: Error) => {
         console.error(err)
         spark.write({
           requestId: msg.requestId,
@@ -517,18 +787,18 @@ module.exports = function (app) {
   return api
 }
 
-function createPrimusAuthorize(authorizeWS) {
-  return function (req, authorized) {
+function createPrimusAuthorize(authorizeWS?: (req: WsRequest) => void) {
+  return function (req: WsRequest, authorized: (error?: unknown) => void) {
     try {
       // can't do primus.use for cookies because it will come after authorized
       if (req.headers.cookie) {
         req.cookies = cookie.parse(req.headers.cookie)
       }
 
-      authorizeWS(req)
+      authorizeWS?.(req)
       authorized()
 
-      const identifier = _.get(req, 'skPrincipal.identifier')
+      const identifier = _.get(req, 'skPrincipal.identifier') as string | undefined
       if (identifier) {
         debug(`authorized username: ${identifier}`)
         req.source = 'ws.' + identifier.replace(/\./g, '_')
@@ -550,7 +820,12 @@ function createPrimusAuthorize(authorizeWS) {
   }
 }
 
-function processUpdates(app, pathSources, spark, msg) {
+function processUpdates(
+  app: AppLike,
+  pathSources: Record<string, Record<string, Spark>>,
+  spark: Spark,
+  msg: WsMessage
+) {
   if (!app.securityStrategy.shouldAllowWrite(spark.request, msg)) {
     debug('security disallowed update')
     app.setProviderError(
@@ -561,7 +836,7 @@ function processUpdates(app, pathSources, spark, msg) {
   }
   app.handleMessage(spark.request.source || 'ws', msg)
 
-  msg.updates.forEach((update) => {
+  msg.updates?.forEach((update) => {
     if (update.values) {
       let source = update.$source
       if (!source && update.source) {
@@ -602,12 +877,12 @@ function processUpdates(app, pathSources, spark, msg) {
   This way the string values are shared across ws connections and not recreated
   for each context-path-ws combination. This reduces memory consumption for
   multiple ws clients.
-  Nevertheless we need to purge this data eventually, otherwise the strings for 
+  Nevertheless we need to purge this data eventually, otherwise the strings for
   AIS targets will stay forever, so implement a simple total purge. This may cause
   some thrashing, but is better than not sharing the values.
 */
-let canonical_meta_contextpath_values = {}
-const getContextPathMetaKey = (context, path) => {
+let canonical_meta_contextpath_values: Record<string, Record<string, string>> = {}
+const getContextPathMetaKey = (context: string, path: string) => {
   const contextPaths =
     canonical_meta_contextpath_values[context] ||
     (canonical_meta_contextpath_values[context] = {})
@@ -622,8 +897,11 @@ setInterval(
   30 * 60 * 1000
 )
 
-function handleValuesMeta(kp) {
-  const fullContextPathKey = getContextPathMetaKey(this.context, kp.path)
+function handleValuesMeta(
+  this: { context: string; spark: Spark; timestamp?: string },
+  kp: { path?: string }
+) {
+  const fullContextPathKey = getContextPathMetaKey(this.context, kp.path || '')
   if (kp.path && !this.spark.sentMetaData[fullContextPathKey]) {
     const split = kp.path.split('.')
     for (let i = split.length; i > 1; i--) {
@@ -635,7 +913,7 @@ function handleValuesMeta(kp) {
       } else {
         //always set to true, even if there is no meta for the path
         this.spark.sentMetaData[partialContextPathKey] = true
-        let meta = getMetadata(partialContextPathKey)
+        const meta = getMetadata(partialContextPathKey)
         if (meta) {
           this.spark.write({
             context: this.context,
@@ -657,14 +935,17 @@ function handleValuesMeta(kp) {
   }
 }
 
-function handleUpdatesMeta(update) {
+function handleUpdatesMeta(
+  this: { context: string; spark: Spark; timestamp?: string },
+  update: DeltaUpdate
+) {
   if (update.values) {
     this.timestamp = update.timestamp
     update.values.forEach(handleValuesMeta, this)
   }
 }
 
-function sendMetaData(app, spark, delta) {
+function sendMetaData(app: AppLike, spark: Spark, delta: SignalKDelta) {
   if (spark.sendMetaDeltas && delta.updates) {
     const thisContext = {
       context: delta.context,
@@ -674,12 +955,15 @@ function sendMetaData(app, spark, delta) {
   }
 }
 
-function processSubscribe(app, unsubscribes, spark, assertBufferSize, msg) {
-  if (
-    Array.isArray(msg.subscribe) &&
-    msg.subscribe.length > 0 &&
-    msg.subscribe[0].path === 'log'
-  ) {
+function processSubscribe(
+  app: AppLike,
+  unsubscribes: Array<() => void>,
+  spark: Spark,
+  assertBufferSize: (spark: Spark) => void,
+  msg: WsMessage
+) {
+  const subscribe = msg.subscribe as Array<{ path?: string }> | undefined
+  if (Array.isArray(subscribe) && subscribe.length > 0 && subscribe[0].path === 'log') {
     if (!spark.logUnsubscribe) {
       spark.logUnsubscribe = startServerLog(app, spark)
     }
@@ -722,12 +1006,19 @@ function processSubscribe(app, unsubscribes, spark, assertBufferSize, msg) {
   }
 }
 
-function processUnsubscribe(app, unsubscribes, msg, onChange, spark) {
+function processUnsubscribe(
+  app: AppLike,
+  unsubscribes: Array<() => void>,
+  msg: WsMessage,
+  onChange: (delta: SignalKDelta) => void,
+  spark: Spark
+) {
   try {
+    const unsubscribe = msg.unsubscribe as Array<{ path?: string }> | undefined
     if (
-      Array.isArray(msg.unsubscribe) &&
-      msg.unsubscribe.length > 0 &&
-      msg.unsubscribe[0].path === 'log'
+      Array.isArray(unsubscribe) &&
+      unsubscribe.length > 0 &&
+      unsubscribe[0].path === 'log'
     ) {
       if (spark.logUnsubscribe) {
         spark.logUnsubscribe()
@@ -739,20 +1030,25 @@ function processUnsubscribe(app, unsubscribes, msg, onChange, spark) {
       spark.sentMetaData = {}
     }
   } catch (e) {
-    console.log(e.message)
-    spark.write(e.message)
+    const error = e as Error
+    console.log(error.message)
+    spark.write(error.message)
     spark.end()
   }
 }
 
-const isSelfSubscription = (query) =>
+const isSelfSubscription = (query: WsQuery) =>
   !query.subscribe || query.subscribe === 'self'
 
-function wrapWithverifyWS(securityStrategy, spark, theFunction) {
+function wrapWithverifyWS<T>(
+  securityStrategy: SecurityStrategy,
+  spark: Spark,
+  theFunction: (msg: T) => void
+) {
   if (!securityStrategy.canAuthorizeWS()) {
     return theFunction
   }
-  return (msg) => {
+  return (msg: T) => {
     try {
       securityStrategy.verifyWS(spark.request)
       theFunction(msg)
@@ -771,31 +1067,41 @@ function wrapWithverifyWS(securityStrategy, spark, theFunction) {
   }
 }
 
-function sendHello(app, helloProps, spark) {
+function sendHello(
+  app: AppLike,
+  helloProps: Record<string, unknown>,
+  spark: Spark
+) {
+  const hello = app.getHello() as Record<string, unknown>
   spark.write({
-    ...app.getHello(),
+    ...hello,
     ...helloProps
   })
 }
 
-function handlePlaybackConnection(app, spark, onChange) {
-  if (_.isUndefined(app.historyProvider)) {
+function handlePlaybackConnection(
+  app: AppLike,
+  spark: Spark,
+  onChange: (delta: SignalKDelta) => void
+) {
+  const historyProvider = app.historyProvider
+  if (!historyProvider) {
     spark.end('No history provider')
     return
   }
 
-  const options = {
+  const options: HistoryOptions = {
     startTime: new Date(spark.query.startTime),
     playbackRate: spark.query.playbackRate || 1
   }
 
-  sendHello(app, options, spark)
+  sendHello(app, options as Record<string, unknown>, spark)
 
   options.subscribe = spark.query.subscribe
-  app.historyProvider.hasAnyData(options, (hasResults) => {
+  historyProvider.hasAnyData(options, (hasResults) => {
     if (hasResults) {
       spark.onDisconnects.push(
-        app.historyProvider.streamHistory(spark, options, onChange)
+        historyProvider.streamHistory(spark, options, onChange)
       )
       spark.isHistory = true
     } else {
@@ -804,7 +1110,11 @@ function handlePlaybackConnection(app, spark, onChange) {
   })
 }
 
-function handleRealtimeConnection(app, spark, onChange) {
+function handleRealtimeConnection(
+  app: AppLike,
+  spark: Spark,
+  onChange: (delta: SignalKDelta) => void
+) {
   sendHello(app, {}, spark)
 
   app.signalk.on('delta', onChange)
@@ -835,8 +1145,13 @@ function handleRealtimeConnection(app, spark, onChange) {
   }
 }
 
-function sendLatestDeltas(app, deltaCache, selfContext, spark) {
-  let deltaFilter = () => false
+function sendLatestDeltas(
+  app: AppLike,
+  deltaCache: AppLike['deltaCache'],
+  selfContext: string,
+  spark: Spark
+) {
+  let deltaFilter: (delta: SignalKDelta) => boolean = () => false
   if (!spark.query.subscribe || spark.query.subscribe === 'self') {
     deltaFilter = (delta) => delta.context === selfContext
   } else if (spark.query.subscribe === 'all') {
@@ -851,7 +1166,7 @@ function sendLatestDeltas(app, deltaCache, selfContext, spark) {
     })
 }
 
-function startServerLog(app, spark) {
+function startServerLog(app: AppLike, spark: Spark) {
   const onServerLogEvent = wrapWithverifyWS(
     app.securityStrategy,
     spark,
@@ -876,7 +1191,7 @@ function startServerLog(app, spark) {
  * Flush accumulated values as spec-compliant deltas.
  * Uses buildFlushDeltas from LatestValuesAccumulator to build the deltas.
  */
-function flushAccumulator(app, spark) {
+function flushAccumulator(app: AppLike, spark: Spark) {
   const map = spark.backpressure.accumulator
   if (map.size === 0) return
 
@@ -897,7 +1212,7 @@ function flushAccumulator(app, spark) {
   debug('Flushed %d accumulated values for spark %s', countBefore, spark.id)
 }
 
-function getAssertBufferSize(config) {
+function getAssertBufferSize(config: AppLike['config']) {
   const MAXSENDBUFFERSIZE =
     process.env.MAXSENDBUFFERSIZE || config.maxSendBufferSize || 4 * 512 * 1024
   const MAXSENDBUFFERCHECKTIME =
@@ -907,18 +1222,18 @@ function getAssertBufferSize(config) {
   debug(`MAXSENDBUFFERSIZE:${MAXSENDBUFFERSIZE}`)
 
   if (MAXSENDBUFFERSIZE === 0) {
-    return () => undefined
+    return (_spark: Spark) => undefined
   }
 
-  return (spark) => {
-    if (spark.request.socket.bufferSize > MAXSENDBUFFERSIZE) {
+  return (spark: Spark) => {
+    if (spark.request.socket.bufferSize > Number(MAXSENDBUFFERSIZE)) {
       if (!spark.bufferSizeExceeded) {
         console.warn(
           `${spark.id} outgoing buffer > max:${spark.request.socket.bufferSize}`
         )
         spark.bufferSizeExceeded = Date.now()
       }
-      if (Date.now() - spark.bufferSizeExceeded > MAXSENDBUFFERCHECKTIME) {
+      if (Date.now() - spark.bufferSizeExceeded > Number(MAXSENDBUFFERCHECKTIME)) {
         spark.end({
           errorMessage:
             'Server outgoing buffer overflow, terminating connection'
@@ -932,3 +1247,5 @@ function getAssertBufferSize(config) {
     }
   }
 }
+
+export = ws
