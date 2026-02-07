@@ -6,7 +6,7 @@
  * You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
-
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -14,21 +14,75 @@
  * limitations under the License.
 */
 
-'use strict'
+import { hostname } from 'os'
+import _ from 'lodash'
 
-const _ = require('lodash')
 import { createDebug } from './debug'
-const debug = createDebug('signalk-server:mdns')
-const dnssd = require('dnssd2')
-const ports = require('./ports')
+import { WithConfig } from './app'
+import * as ports from './ports'
 
-module.exports = function mdnsResponder(app) {
+const debug = createDebug('signalk-server:mdns')
+
+const dnssd = require('dnssd2') as MdnsModule
+
+type MdnsService = {
+  name: string
+}
+
+type MdnsOptions = {
+  txtRecord: TxtRecord
+  txt: TxtRecord
+  host?: string
+}
+
+type MdnsAdvertisement = {
+  on: (event: 'error', cb: (err: Error) => void) => void
+  start: () => void
+  stop: () => void
+}
+
+type MdnsModule = {
+  tcp: (name: string) => MdnsService
+  Advertisement: new (
+    type: MdnsService,
+    port: number,
+    options: MdnsOptions
+  ) => MdnsAdvertisement
+}
+
+type MdnsInterface = {
+  type: string
+  name: string
+  port: number
+}
+
+type App = WithConfig & {
+  selfId: string
+  interfaces: Record<string, { mdns?: MdnsInterface }>
+}
+
+type TxtRecord = {
+  txtvers?: string
+  swname?: string
+  swvers?: string
+  roles?: string
+  self?: string
+  vname?: string
+  vmmsi?: string
+  vuuid?: string
+}
+
+type MdnsResponder = {
+  stop: () => void
+}
+
+const mdnsResponder = (app: App): MdnsResponder | undefined => {
   const config = app.config
 
-  let mdns = dnssd
+  let mdns: MdnsModule = dnssd
 
   try {
-    mdns = require('mdns')
+    mdns = require('mdns') as MdnsModule
     debug('using  mdns')
   } catch (ex) {
     debug(ex)
@@ -40,7 +94,7 @@ module.exports = function mdnsResponder(app) {
     return
   }
 
-  let txtRecord = {
+  let txtRecord: TxtRecord = {
     txtvers: '1',
     swname: config.name,
     swvers: config.version,
@@ -53,9 +107,9 @@ module.exports = function mdnsResponder(app) {
   }
 
   // Strip all the null or empty props in txtRecord
-  txtRecord = _.pickBy(txtRecord, _.identity)
+  txtRecord = _.pickBy(txtRecord, _.identity) as TxtRecord
 
-  const types = []
+  const types: Array<{ type: MdnsService; port: number }> = []
   types.push({
     type: app.config.settings.ssl ? mdns.tcp('https') : mdns.tcp('http'),
     port: ports.getExternalPort(app)
@@ -66,14 +120,14 @@ module.exports = function mdnsResponder(app) {
       _.isObject(app.interfaces[key]) &&
       _.isObject(app.interfaces[key].mdns)
     ) {
-      const service = app.interfaces[key].mdns
+      const service = app.interfaces[key].mdns as MdnsInterface
 
-      if (
-        'tcp'.indexOf(service.type) !== -1 &&
-        service.name.charAt(0) === '_'
-      ) {
+      if ('tcp'.indexOf(service.type) !== -1 && service.name.charAt(0) === '_') {
+        const typeFactory = mdns[service.type as keyof MdnsModule] as (
+          name: string
+        ) => MdnsService
         types.push({
-          type: mdns[service.type](service.name),
+          type: typeFactory(service.name),
           port: service.port
         })
       } else {
@@ -85,23 +139,22 @@ module.exports = function mdnsResponder(app) {
     }
   }
 
-  const options = {
+  const options: MdnsOptions = {
     txtRecord,
     txt: txtRecord
   }
 
   const host = app.config.getExternalHostname()
 
-  if (host !== require('os').hostname()) {
+  if (host !== hostname()) {
     options.host = host
   }
 
   debug(options)
 
-  const ads = []
+  const ads: MdnsAdvertisement[] = []
 
-  for (const i in types) {
-    const type = types[i]
+  for (const type of types) {
     debug(
       'Starting mDNS ad: ' +
         type.type +
@@ -120,11 +173,13 @@ module.exports = function mdnsResponder(app) {
   }
 
   return {
-    stop: function () {
-      ads.forEach(function (ad) {
+    stop: () => {
+      ads.forEach((ad) => {
         debug('Stopping mDNS advertisement...')
         ad.stop()
       })
     }
   }
 }
+
+export = mdnsResponder
