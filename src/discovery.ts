@@ -6,7 +6,7 @@
  * You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
-
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -14,14 +14,94 @@
  * limitations under the License.
  */
 
-import { createDebug } from './debug'
-const debug = createDebug('signalk-server:discovery')
-const canboatjs = require('@canboat/canboatjs')
-const dgram = require('dgram')
-const mdns = require('mdns-js')
-const { networkInterfaces } = require('os')
+import * as dgram from 'dgram'
+import { networkInterfaces } from 'os'
 
-module.exports.runDiscovery = function (app) {
+import { createDebug } from './debug'
+
+const debug = createDebug('signalk-server:discovery')
+
+type WsType = 'ws' | 'wss'
+
+type ProviderOptions = {
+  type: 'NMEA0183' | 'SignalK'
+  subOptions: {
+    type: 'udp' | 'tcp' | WsType
+    host?: string
+    port: number | string
+    providerId?: string
+  }
+  providerId?: string
+}
+
+type PipeElement = {
+  type: 'providers/simple'
+  options: ProviderOptions
+}
+
+type PipedProvider = {
+  pipeElements?: PipeElement[]
+}
+
+type DiscoveredProvider = {
+  id: string
+  enabled?: boolean
+  pipeElements: PipeElement[]
+}
+
+type App = {
+  config: {
+    settings: {
+      pipedProviders: PipedProvider[]
+    }
+  }
+  emit: (event: 'discovered', payload: DiscoveredProvider) => void
+}
+
+type CanboatModule = {
+  discover?: (app: App) => void
+}
+
+type MdnsService = {
+  name: string
+}
+
+type MdnsUpdate = {
+  addresses: string[]
+  type: Array<{ name: string }>
+  host: string
+  port: number
+}
+
+type MdnsBrowser = {
+  on(event: 'ready', handler: () => void): void
+  on(event: 'update', handler: (data: MdnsUpdate) => void): void
+  discover: () => void
+  stop: () => void
+}
+
+type MdnsModule = {
+  excludeInterface: (ip: string) => void
+  tcp: (name: string) => MdnsService
+  createBrowser: (service: MdnsService) => MdnsBrowser
+}
+
+type GoFreeService = {
+  Service: string
+  Port: number
+}
+
+type GoFreeMessage = {
+  SerialNumber: string
+  Name: string
+  IP: string
+  Services?: GoFreeService[]
+}
+
+const canboatjs = require('@canboat/canboatjs') as CanboatModule
+const mdns = require('mdns-js') as MdnsModule
+
+export function runDiscovery(app: App) {
   if (canboatjs.discover) {
     try {
       canboatjs.discover(app)
@@ -35,7 +115,7 @@ module.exports.runDiscovery = function (app) {
   discoverSignalkWs('ws')
   discoverSignalkWs('wss')
 
-  function findUDPProvider(port) {
+  function findUDPProvider(port: string) {
     return app.config.settings.pipedProviders.find((provider) => {
       return (
         provider.pipeElements &&
@@ -49,7 +129,7 @@ module.exports.runDiscovery = function (app) {
     })
   }
 
-  function findTCPProvider(host, port) {
+  function findTCPProvider(host: string, port: number) {
     return app.config.settings.pipedProviders.find((provider) => {
       return (
         provider.pipeElements &&
@@ -64,7 +144,7 @@ module.exports.runDiscovery = function (app) {
     })
   }
 
-  function findWSProvider(ip, wsType, host, port) {
+  function findWSProvider(ip: string, wsType: WsType, host: string, port: number) {
     return app.config.settings.pipedProviders.find((provider) => {
       return (
         provider.pipeElements &&
@@ -83,12 +163,12 @@ module.exports.runDiscovery = function (app) {
 
   function discoverGoFree() {
     const socket = dgram.createSocket('udp4')
-    const found = []
+    const found: string[] = []
     socket.on('message', function (buffer) {
       const msg = buffer.toString('utf8')
       if (msg[0] === '{') {
         try {
-          const json = JSON.parse(msg)
+          const json = JSON.parse(msg) as GoFreeMessage
           const serial = json.SerialNumber
           if (json.Services && found.indexOf(serial) === -1) {
             json.Services.forEach((service) => {
@@ -143,19 +223,17 @@ module.exports.runDiscovery = function (app) {
       debug('discoverGoFree:', ex)
     }
     setTimeout(() => {
-      if (socket) {
-        socket.close()
-      }
+      socket.close()
     }, 10000)
   }
 
   function discoverWLN10() {
     if (!findUDPProvider('2000')) {
-      let socket = dgram.createSocket('udp4')
+      let socket: dgram.Socket | undefined = dgram.createSocket('udp4')
       socket.on('message', function (buffer) {
         const msg = buffer.toString('utf8')
         if (msg[0] === '$') {
-          socket.close()
+          socket?.close()
           socket = undefined
           app.emit('discovered', {
             id: 'WLN10',
@@ -187,21 +265,19 @@ module.exports.runDiscovery = function (app) {
         debug('discoverWLN10:', ex)
       }
       setTimeout(() => {
-        if (socket) {
-          socket.close()
-        }
+        socket?.close()
       }, 5000)
     }
   }
 
-  function discoverSignalkWs(wsType) {
+  function discoverSignalkWs(wsType: WsType) {
     try {
       mdns.excludeInterface('0.0.0.0')
-      var browser = mdns.createBrowser(mdns.tcp('signalk-' + wsType))
+      const browser = mdns.createBrowser(mdns.tcp(`signalk-${wsType}`))
 
       browser.on('ready', function onReady() {
         try {
-          debug('looking for SignalK ' + wsType)
+          debug(`looking for SignalK ${wsType}`)
           browser.discover()
         } catch (err) {
           debug('discoverSignalkWs:', err)
@@ -213,11 +289,11 @@ module.exports.runDiscovery = function (app) {
           if (
             !isLocalIP(data.addresses[0]) &&
             Array.isArray(data.type) &&
-            data.type[0].name === 'signalk-' + wsType &&
+            data.type[0].name === `signalk-${wsType}` &&
             !findWSProvider(data.addresses[0], wsType, data.host, data.port)
           ) {
-            debug('discoverSignalkWs found data[' + wsType + ']:', data)
-            const providerId = wsType + '-' + data.host + ':' + data.port
+            debug(`discoverSignalkWs found data[${wsType}]:`, data)
+            const providerId = `${wsType}-${data.host}:${data.port}`
             app.emit('discovered', {
               id: providerId,
               enabled: false,
@@ -256,13 +332,14 @@ module.exports.runDiscovery = function (app) {
     }
   }
 
-  function isLocalIP(IP) {
+  function isLocalIP(ip: string) {
     const nets = networkInterfaces()
 
     for (const name of Object.keys(nets)) {
-      for (const net of nets[name]) {
+      const entries = nets[name] ?? []
+      for (const net of entries) {
         if (net.family === 'IPv4' && !net.internal) {
-          if (net.address === IP) {
+          if (net.address === ip) {
             return true
           }
         }
@@ -273,15 +350,15 @@ module.exports.runDiscovery = function (app) {
 }
 
 if (require.main === module) {
-  const app = {
+  const app: App = {
     config: {
       settings: {
         pipedProviders: []
       }
     },
-    emit: (event, p) => {
-      console.log(`found ${JSON.stringify(p)}`)
+    emit: (_event, payload) => {
+      console.log(`found ${JSON.stringify(payload)}`)
     }
   }
-  module.exports.runDiscovery(app)
+  runDiscovery(app)
 }
