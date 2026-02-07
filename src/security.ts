@@ -429,7 +429,6 @@ export type SecurityConfigSaver = (
 ) => void
 export type SecurityConfigGetter = (app: any) => any
 
-<<<<<<< HEAD
 /**
  * When Express trust proxy is enabled:
  * - req.ip will reflect the client IP and we don't want rateLimit to
@@ -441,7 +440,8 @@ export function getRateLimitValidationOptions(app: WithConfig) {
     app.config.settings.trustProxy !== 'false'
     ? { xForwardedForHeader: false, trustProxy: false }
     : undefined
-=======
+}
+
 export type Principal = {
   identifier: string
   permissions: 'admin' | 'readonly' | 'readwrite'
@@ -452,5 +452,4 @@ declare module 'express-serve-static-core' {
   interface Request {
     skPrincipal: Principal
   }
->>>>>>> 695dedc7 (chore: convert interfaces/applicationData.{js,ts})
 }
