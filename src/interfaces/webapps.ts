@@ -14,18 +14,43 @@
  * limitations under the License.
 */
 
-import { createDebug } from '../debug'
-const debug = createDebug('signalk-server:interfaces:webapps')
-const fs = require('fs')
-const path = require('path')
-const express = require('express')
-const modulesWithKeyword = require('../modules').modulesWithKeyword
-import { SERVERROUTESPREFIX } from '../constants'
+import fs from 'fs'
+import path from 'path'
+import express from 'express'
 import { uniqBy } from 'lodash'
 
-module.exports = function (app) {
+import { createDebug } from '../debug'
+import { SERVERROUTESPREFIX } from '../constants'
+
+type WebModule = {
+  location: string
+  module: string
+  metadata: { name: string }
+}
+
+type AppLike = {
+  config: unknown
+  webapps?: Array<{ name: string }>
+  embeddablewebapps?: Array<{ name: string }>
+  addons?: Array<{ name: string }>
+  pluginconfigurators?: Array<{ name: string }>
+  use: (path: string, handler: unknown) => void
+  get: (
+    path: string,
+    handler: (req: unknown, res: { json: (payload: unknown) => void }) => void
+  ) => void
+}
+
+type ModulesApi = {
+  modulesWithKeyword: (config: unknown, keyword: string) => WebModule[]
+}
+
+const debug = createDebug('signalk-server:interfaces:webapps')
+const { modulesWithKeyword } = require('../modules') as ModulesApi
+
+const webapps = (app: AppLike) => {
   return {
-    start: function () {
+    start: () => {
       // Preserve any existing webapps (e.g., from WASM plugins loaded earlier)
       const existingWebapps = app.webapps || []
       const nodeWebapps = mountWebModules(app, 'signalk-webapp').map(
@@ -52,11 +77,11 @@ module.exports = function (app) {
       mountApis(app)
     },
 
-    stop: function () {}
+    stop: () => {}
   }
 }
 
-function mountWebModules(app, keyword) {
+function mountWebModules(app: AppLike, keyword: string) {
   debug(`mountWebModules:${keyword}`)
   const modules = modulesWithKeyword(app.config, keyword)
   modules.forEach((moduleData) => {
@@ -70,12 +95,16 @@ function mountWebModules(app, keyword) {
   return modules
 }
 
-function mountApis(app) {
-  app.get(`${SERVERROUTESPREFIX}/webapps`, function (req, res) {
-    const allWebapps = [].concat(app.webapps).concat(app.embeddablewebapps)
+function mountApis(app: AppLike) {
+  app.get(`${SERVERROUTESPREFIX}/webapps`, (_req, res) => {
+    const allWebapps = ([] as Array<{ name: string }>)
+      .concat(app.webapps || [])
+      .concat(app.embeddablewebapps || [])
     res.json(uniqBy(allWebapps, 'name'))
   })
-  app.get(`${SERVERROUTESPREFIX}/addons`, function (req, res) {
-    res.json(app.addons)
+  app.get(`${SERVERROUTESPREFIX}/addons`, (_req, res) => {
+    res.json(app.addons || [])
   })
 }
+
+export = webapps
