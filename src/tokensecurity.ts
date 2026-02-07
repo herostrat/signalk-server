@@ -1088,11 +1088,19 @@ function tokenSecurityFactory(
   }
 
   strategy.getDevices = (theConfig: SecurityConfig): Device[] => {
-    if (theConfig && theConfig.devices) {
-      return theConfig.devices
-    } else {
+    if (!theConfig || !theConfig.devices) {
       return []
     }
+    return theConfig.devices.map((device) => {
+      const requestedPermissions = device.requestedPermissions
+      if (typeof requestedPermissions === 'boolean') {
+        return {
+          ...device,
+          requestedPermissions: requestedPermissions ? 'true' : ''
+        }
+      }
+      return device
+    })
   }
 
   strategy.deleteDevice = (

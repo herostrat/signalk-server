@@ -58,12 +58,19 @@ interface AppWithIntervals {
 
 const requests: Record<string, Request> = {}
 
+export const safeObjectKeys = (
+  value?: Record<string, unknown> | null
+): string[] => Object.keys(value ?? {})
+
+export const safeObjectValues = <T>(value?: Record<string, T> | null): T[] =>
+  Object.values(value ?? {})
+
 const pruneRequestTimeout = 60 * 60 * 1000
 const pruneIntervalRate = 15 * 60 * 1000
 let pruneInterval: NodeJS.Timeout | undefined
 
 export function resetRequests(): void {
-  Object.keys(requests).forEach((id) => {
+  safeObjectKeys(requests).forEach((id) => {
     delete requests[id]
   })
 }
@@ -182,21 +189,21 @@ export function queryRequest(requestId: string): Promise<Reply> {
 export function findRequest(
   matcher: (request: Request) => boolean
 ): Request | undefined {
-  return Object.values(requests).find(matcher)
+  return safeObjectValues(requests).find(matcher)
 }
 
 export function filterRequests(
   type: RequestType,
   state: RequestState | null
 ): Request[] {
-  return Object.values(requests).filter(
+  return safeObjectValues(requests).filter(
     (r) => r.type === type && (state === null || r.state === state)
   )
 }
 
 function pruneRequests(): void {
   debug('pruning requests')
-  Object.keys(requests).forEach((id) => {
+  safeObjectKeys(requests).forEach((id) => {
     const request = requests[id]
     const diff = Date.now() - request.date.getTime()
     if (diff > pruneRequestTimeout) {

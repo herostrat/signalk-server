@@ -1,5 +1,6 @@
 import { expect } from 'chai'
 import { createRequire } from 'module'
+import type { SecurityConfig } from '../../src/security'
 
 const require = createRequire(import.meta.url)
 const bcrypt = require('bcryptjs')
@@ -933,7 +934,10 @@ describe('tokensecurity', () => {
       state: 'PENDING',
       accessIdentifier: 'device-1',
       accessDescription: 'Device',
-      clientRequest: { accessRequest: { clientId: 'device-1' } },
+      clientRequest: {
+        accessRequest: { clientId: 'device-1' },
+        requestedPermissions: true
+      },
       permissions: 'readwrite'
     }
 
@@ -992,7 +996,10 @@ describe('tokensecurity', () => {
       state: 'PENDING',
       accessIdentifier: 'device-1',
       accessDescription: 'Device',
-      clientRequest: { accessRequest: { clientId: 'device-1' } },
+      clientRequest: {
+        accessRequest: { clientId: 'device-1' },
+        requestedPermissions: true
+      },
       permissions: 'readwrite'
     }
     const updates: Array<{ statusCode: number; data?: { token?: string } }> = []
@@ -1051,6 +1058,9 @@ describe('tokensecurity', () => {
           (err, newConfig) => {
             callbackError = err as Error
             expect(newConfig?.devices?.[0]?.clientId).to.equal('device-1')
+            expect(newConfig?.devices?.[0]?.requestedPermissions).to.equal(
+              'true'
+            )
             resolve()
           }
         )
@@ -1935,10 +1945,11 @@ describe('tokensecurity', () => {
       })
       expect(updateError?.message).to.equal('user not found')
 
+      const previousPassword = config.users[0].password
       await new Promise<void>((resolve) => {
-        strategy.setPassword(config, '0', 'pw2', () => resolve())
+        strategy.setPassword(config, 'user', 'pw2', () => resolve())
       })
-      expect(config.users[0].password).to.not.equal('pw')
+      expect(config.users[0].password).to.not.equal(previousPassword)
 
       await new Promise<void>((resolve) => {
         strategy.deleteUser(config, 'user2', () => resolve())
@@ -1971,6 +1982,43 @@ describe('tokensecurity', () => {
         strategy.deleteDevice(config, 'device-1', () => resolve())
       })
       expect(config.devices).to.have.length(0)
+    } finally {
+      restore()
+    }
+  })
+
+  it('normalizes boolean requestedPermissions on devices', () => {
+    const { tokensecurity, restore } = loadTokenSecurity({
+      parseOIDCConfig: () => ({ enabled: false }),
+      registerOIDCRoutes: () => {},
+      registerOIDCAdminRoutes: () => {}
+    })
+
+    try {
+      const app = createApp()
+      const config = {
+        allow_readonly: true,
+        expiration: '1h',
+        secretKey: 'secret',
+        users: [],
+        devices: [
+          {
+            clientId: 'device-1',
+            permissions: 'readonly',
+            description: 'd',
+            config: {},
+            requestedPermissions: true
+          }
+        ],
+        immutableConfig: false,
+        allowDeviceAccessRequests: true,
+        allowNewUserRegistration: true,
+        acls: []
+      } as unknown as SecurityConfig
+
+      const strategy = tokensecurity(app, config)
+      const devices = strategy.getDevices(config)
+      expect(devices[0].requestedPermissions).to.equal('true')
     } finally {
       restore()
     }

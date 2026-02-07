@@ -121,4 +121,11 @@ describe('requestResponse', () => {
     )
     await expectReject(requestResponse.queryRequest('missing'), 'not found')
   })
+
+  it('treats nullish collections as empty', () => {
+    expect(requestResponse.safeObjectKeys(undefined)).to.deep.equal([])
+    expect(requestResponse.safeObjectKeys(null)).to.deep.equal([])
+    expect(requestResponse.safeObjectValues(undefined)).to.deep.equal([])
+    expect(requestResponse.safeObjectValues(null)).to.deep.equal([])
+  })
 })
