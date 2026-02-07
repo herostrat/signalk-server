@@ -12,8 +12,9 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
-*/
+ */
 
+import * as dnssdModule from 'dnssd2'
 import { hostname } from 'os'
 import _ from 'lodash'
 
@@ -23,7 +24,7 @@ import * as ports from './ports'
 
 const debug = createDebug('signalk-server:mdns')
 
-const dnssd = require('dnssd2') as MdnsModule
+const dnssd = dnssdModule as unknown as MdnsModule
 
 type MdnsService = {
   name: string
@@ -82,6 +83,7 @@ const mdnsResponder = (app: App): MdnsResponder | undefined => {
   let mdns: MdnsModule = dnssd
 
   try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     mdns = require('mdns') as MdnsModule
     debug('using  mdns')
   } catch (ex) {
@@ -122,7 +124,10 @@ const mdnsResponder = (app: App): MdnsResponder | undefined => {
     ) {
       const service = app.interfaces[key].mdns as MdnsInterface
 
-      if ('tcp'.indexOf(service.type) !== -1 && service.name.charAt(0) === '_') {
+      if (
+        'tcp'.indexOf(service.type) !== -1 &&
+        service.name.charAt(0) === '_'
+      ) {
         const typeFactory = mdns[service.type as keyof MdnsModule] as (
           name: string
         ) => MdnsService

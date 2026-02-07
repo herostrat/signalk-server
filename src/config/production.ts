@@ -12,9 +12,11 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
-*/
+ */
 
+import errorhandler from 'errorhandler'
 import { isUndefined } from 'lodash'
+import morgan from 'morgan'
 
 type AppLike = {
   config: {
@@ -38,8 +40,8 @@ const production = (app: AppLike) => {
     if (!accessLogging) {
       morganOptions.skip = () => true
     }
-    app.use(require('morgan')('combined', morganOptions))
-    app.use(require('errorhandler')())
+    app.use(morgan('combined', morganOptions))
+    app.use(errorhandler())
   }
 }
 

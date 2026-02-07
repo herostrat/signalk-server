@@ -12,9 +12,14 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
-*/
+ */
 
+import * as canboatjsModule from '@canboat/canboatjs'
+import * as n2kSignalkModule from '@signalk/n2k-signalk'
+import * as nmea0183Module from '@signalk/nmea0183-signalk'
 import { EventEmitter } from 'events'
+
+import { deletePath, putPath } from '../put'
 
 type AppLike = EventEmitter & {
   propertyValues?: unknown
@@ -45,25 +50,6 @@ type PutReply = {
   state: string
   statusCode?: number
 }
-
-type PutPath = (
-  app: AppLike,
-  context: string,
-  path: string,
-  put: SignalkPut & Record<string, unknown>,
-  req: RequestLike,
-  requestId: string | undefined,
-  cb: (reply: PutReply) => void
-) => void
-
-type DeletePath = (
-  app: AppLike,
-  context: string,
-  path: string,
-  req: RequestLike,
-  requestId: string | undefined,
-  cb: (reply: PutReply) => void
-) => void
 
 type SignalKDelta = {
   updates: Array<{
@@ -130,15 +116,18 @@ type DetectResult = {
   error?: string
 }
 
-const Parser0183 = require('@signalk/nmea0183-signalk') as Parser0183Ctor
-const N2kMapper = require('@signalk/n2k-signalk').N2kMapper as N2kMapperCtor
-const { putPath, deletePath } = require('../put') as {
-  putPath: PutPath
-  deletePath: DeletePath
+type PutApp = Parameters<typeof putPath>[0]
+type PutRequestBody = Parameters<typeof putPath>[3]
+type PutRequest = Parameters<typeof putPath>[4]
+type DeleteApp = Parameters<typeof deletePath>[0]
+type DeleteRequest = Parameters<typeof deletePath>[3]
+
+const Parser0183 = nmea0183Module as unknown as Parser0183Ctor
+const { N2kMapper } = n2kSignalkModule as unknown as {
+  N2kMapper: N2kMapperCtor
 }
-const { isN2KString, FromPgn, pgnToActisenseSerialFormat } = require(
-  '@canboat/canboatjs'
-) as CanboatApi
+const { isN2KString, FromPgn, pgnToActisenseSerialFormat } =
+  canboatjsModule as unknown as CanboatApi
 
 const serverRoutesPrefix = '/skServer'
 
@@ -201,7 +190,9 @@ const playground = (app: AppLike) => {
         } else {
           return { error: 'unknown JSON format' }
         }
-        const msgs = (Array.isArray(parsed) ? parsed : [parsed]) as SignalkMessage[]
+        const msgs = (
+          Array.isArray(parsed) ? parsed : [parsed]
+        ) as SignalkMessage[]
         return { type, msgs }
       } catch (ex) {
         const error = ex as Error
@@ -266,11 +257,11 @@ const playground = (app: AppLike) => {
                   resolve('Timed out waiting for put result')
                 }, 5000)
                 putPath(
-                  app,
+                  app as unknown as PutApp,
                   msg.context || '',
                   put.path || '',
-                  put,
-                  req,
+                  put as PutRequestBody,
+                  req as unknown as PutRequest,
                   msg.requestId,
                   (reply) => {
                     if (reply.state !== 'PENDING') {
@@ -287,10 +278,10 @@ const playground = (app: AppLike) => {
                   resolve('Timed out waiting for put result')
                 }, 5000)
                 deletePath(
-                  app,
+                  app as unknown as DeleteApp,
                   msg.context || '',
                   del.path || '',
-                  req,
+                  req as unknown as DeleteRequest,
                   msg.requestId,
                   (reply) => {
                     if (reply.state !== 'PENDING') {
@@ -329,7 +320,9 @@ const playground = (app: AppLike) => {
             }
             const updates = m.updates
             const values = updates[0]?.values
-            return updates.length > 0 && Array.isArray(values) && values.length > 0
+            return (
+              updates.length > 0 && Array.isArray(values) && values.length > 0
+            )
           })
         }
         res.json(data)

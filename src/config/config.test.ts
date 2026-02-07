@@ -1,7 +1,9 @@
 import { expect } from 'chai'
 import path from 'path'
 
-const { getConfigDirectory } = require('./config') as {
+import * as config from './config'
+
+const { getConfigDirectory } = config as unknown as {
   getConfigDirectory: (app: ConfigDirApp) => string
 }
 

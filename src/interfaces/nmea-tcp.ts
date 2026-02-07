@@ -14,6 +14,7 @@
  */
 
 import { EventEmitter } from 'events'
+import * as net from 'net'
 import _ from 'lodash'
 
 import { createDebug } from '../debug'
@@ -36,7 +37,6 @@ type NmeaTcpApi = {
 }
 
 const nmeaTcp = (app: AppLike): NmeaTcpApi => {
-  const net = require('net') as typeof import('net')
   const openSockets: Record<number, TcpSocket> = {}
   let idSequence = 0
   let server: import('net').Server | null = null

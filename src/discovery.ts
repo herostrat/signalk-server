@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+import * as canboatjsModule from '@canboat/canboatjs'
 import * as dgram from 'dgram'
+import * as mdnsModule from 'mdns-js'
 import { networkInterfaces } from 'os'
 
 import { createDebug } from './debug'
@@ -98,8 +100,8 @@ type GoFreeMessage = {
   Services?: GoFreeService[]
 }
 
-const canboatjs = require('@canboat/canboatjs') as CanboatModule
-const mdns = require('mdns-js') as MdnsModule
+const canboatjs = canboatjsModule as CanboatModule
+const mdns = mdnsModule as MdnsModule
 
 export function runDiscovery(app: App) {
   if (canboatjs.discover) {
@@ -144,7 +146,12 @@ export function runDiscovery(app: App) {
     })
   }
 
-  function findWSProvider(ip: string, wsType: WsType, host: string, port: number) {
+  function findWSProvider(
+    ip: string,
+    wsType: WsType,
+    host: string,
+    port: number
+  ) {
     return app.config.settings.pipedProviders.find((provider) => {
       return (
         provider.pipeElements &&

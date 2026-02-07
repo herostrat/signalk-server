@@ -20,20 +20,18 @@ import express from 'express'
 import { uniqBy } from 'lodash'
 
 import { createDebug } from '../debug'
+import type { Config } from '../config/config'
 import { SERVERROUTESPREFIX } from '../constants'
+import { modulesWithKeyword } from '../modules'
 
-type WebModule = {
-  location: string
-  module: string
-  metadata: { name: string }
-}
+type WebAppMeta = { name: string }
 
 type AppLike = {
-  config: unknown
-  webapps?: Array<{ name: string }>
-  embeddablewebapps?: Array<{ name: string }>
-  addons?: Array<{ name: string }>
-  pluginconfigurators?: Array<{ name: string }>
+  config: Config
+  webapps?: WebAppMeta[]
+  embeddablewebapps?: WebAppMeta[]
+  addons?: WebAppMeta[]
+  pluginconfigurators?: WebAppMeta[]
   use: (path: string, handler: unknown) => void
   get: (
     path: string,
@@ -41,12 +39,7 @@ type AppLike = {
   ) => void
 }
 
-type ModulesApi = {
-  modulesWithKeyword: (config: unknown, keyword: string) => WebModule[]
-}
-
 const debug = createDebug('signalk-server:interfaces:webapps')
-const { modulesWithKeyword } = require('../modules') as ModulesApi
 
 const webapps = (app: AppLike) => {
   return {
@@ -54,18 +47,18 @@ const webapps = (app: AppLike) => {
       // Preserve any existing webapps (e.g., from WASM plugins loaded earlier)
       const existingWebapps = app.webapps || []
       const nodeWebapps = mountWebModules(app, 'signalk-webapp').map(
-        (moduleData) => moduleData.metadata
+        (moduleData) => moduleData.metadata as WebAppMeta
       )
       // Merge Node.js webapps with existing WASM webapps, avoiding duplicates
       app.webapps = uniqBy([...nodeWebapps, ...existingWebapps], 'name')
       app.addons = mountWebModules(app, 'signalk-node-server-addon').map(
-        (moduleData) => moduleData.metadata
+        (moduleData) => moduleData.metadata as WebAppMeta
       )
       const existingEmbeddableWebapps = app.embeddablewebapps || []
       const nodeEmbeddableWebapps = mountWebModules(
         app,
         'signalk-embeddable-webapp'
-      ).map((moduleData) => moduleData.metadata)
+      ).map((moduleData) => moduleData.metadata as WebAppMeta)
       app.embeddablewebapps = uniqBy(
         [...nodeEmbeddableWebapps, ...existingEmbeddableWebapps],
         'name'
@@ -73,7 +66,7 @@ const webapps = (app: AppLike) => {
       app.pluginconfigurators = mountWebModules(
         app,
         'signalk-plugin-configurator'
-      ).map((moduleData) => moduleData.metadata)
+      ).map((moduleData) => moduleData.metadata as WebAppMeta)
       mountApis(app)
     },
 
@@ -81,7 +74,10 @@ const webapps = (app: AppLike) => {
   }
 }
 
-function mountWebModules(app: AppLike, keyword: string) {
+function mountWebModules(
+  app: AppLike,
+  keyword: string
+): ReturnType<typeof modulesWithKeyword> {
   debug(`mountWebModules:${keyword}`)
   const modules = modulesWithKeyword(app.config, keyword)
   modules.forEach((moduleData) => {

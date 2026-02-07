@@ -17,7 +17,9 @@
 import { EventEmitter } from 'events'
 import _ from 'lodash'
 
+import { writeSettingsFile } from '../config/config'
 import { SERVERROUTESPREFIX } from '../constants'
+import { runDiscovery } from '../discovery'
 
 type ProviderPipeOptions = {
   logging?: boolean
@@ -76,20 +78,8 @@ type AppLike = EventEmitter & {
   delete: (path: string, handler: Handler) => void
 }
 
-type ConfigApi = {
-  writeSettingsFile: (
-    app: AppLike,
-    settings: AppLike['config']['settings'],
-    cb: (err?: Error) => void
-  ) => void
-}
-
-type DiscoveryApi = {
-  runDiscovery: (app: AppLike) => void
-}
-
-const config = require('../config/config') as ConfigApi
-const { runDiscovery } = require('../discovery') as DiscoveryApi
+type DiscoveryApp = Parameters<typeof runDiscovery>[0]
+type ConfigApp = Parameters<typeof writeSettingsFile>[0]
 
 const providers = (app: AppLike) => {
   app.on('discovered', (provider: ProviderConfig) => {
@@ -107,7 +97,7 @@ const providers = (app: AppLike) => {
 
   app.put(`${SERVERROUTESPREFIX}/runDiscovery`, (_req, res) => {
     app.discoveredProviders = []
-    runDiscovery(app)
+    runDiscovery(app as unknown as DiscoveryApp)
     res.json('Discovery started')
   })
 
@@ -159,15 +149,19 @@ const providers = (app: AppLike) => {
     }
     app.config.settings.pipedProviders.splice(idx, 1)
 
-    config.writeSettingsFile(app, app.config.settings, (err) => {
-      if (err) {
-        console.error(err)
-        res.status(500).send('Unable to save to settings file')
-      } else {
-        res.type('text/plain')
-        res.send('Connection deleted')
+    writeSettingsFile(
+      app as unknown as ConfigApp,
+      app.config.settings,
+      (err?: Error) => {
+        if (err) {
+          console.error(err)
+          res.status(500).send('Unable to save to settings file')
+        } else {
+          res.type('text/plain')
+          res.send('Connection deleted')
+        }
       }
-    })
+    )
   })
 
   function updateProvider(
@@ -227,10 +221,7 @@ const providers = (app: AppLike) => {
     }
 
     if (provider.options.type === 'canbus-canboatjs') {
-      const uniqueNumber = parseInt(
-        String(provider.options.uniqueNumber),
-        10
-      )
+      const uniqueNumber = parseInt(String(provider.options.uniqueNumber), 10)
       if (!Number.isNaN(uniqueNumber)) {
         provider.options.uniqueNumber = uniqueNumber
       } else {
@@ -252,15 +243,19 @@ const providers = (app: AppLike) => {
         app.config.settings.pipedProviders.push(updatedProvider)
       }
 
-      config.writeSettingsFile(app, app.config.settings, (err) => {
-        if (err) {
-          console.error(err)
-          res.status(500).send('Unable to save to settings file')
-        } else {
-          res.type('text/plain')
-          res.send('Connection ' + (isNew ? 'added' : 'updated'))
+      writeSettingsFile(
+        app as unknown as ConfigApp,
+        app.config.settings,
+        (err?: Error) => {
+          if (err) {
+            console.error(err)
+            res.status(500).send('Unable to save to settings file')
+          } else {
+            res.type('text/plain')
+            res.send('Connection ' + (isNew ? 'added' : 'updated'))
+          }
         }
-      })
+      )
     }
   }
 }

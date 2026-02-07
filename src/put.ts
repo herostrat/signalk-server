@@ -1,6 +1,11 @@
 import _ from 'lodash'
 import { createDebug } from './debug'
-import { createRequest, updateRequest, RequestState, Reply } from './requestResponse'
+import {
+  createRequest,
+  updateRequest,
+  RequestState,
+  Reply
+} from './requestResponse'
 import {
   readDefaultsFile,
   writeDefaultsFile,
@@ -44,7 +49,11 @@ type MetaHandler = (
   cb: ActionCallback
 ) => ActionReply
 
-type DeleteHandler = (context: string, path: string, cb: ActionCallback) => ActionReply
+type DeleteHandler = (
+  context: string,
+  path: string,
+  cb: ActionCallback
+) => ActionReply
 
 type PutRequestBody = {
   value: unknown
@@ -71,7 +80,10 @@ type PutApp = ConfigApp &
     deRegisterActionHandler?: typeof deRegisterActionHandler
   }
 
-const actionHandlers: Record<string, Record<string, Record<string, ServerActionHandler>>> = {}
+const actionHandlers: Record<
+  string,
+  Record<string, Record<string, ServerActionHandler>>
+> = {}
 let putMetaHandler: MetaHandler
 let deleteMetaHandler: DeleteHandler
 let putNotificationHandler: MetaHandler
@@ -241,7 +253,8 @@ export function start(app: PutApp): void {
       delete metaValue[name]
 
       fullMeta =
-        (getMetadata(`vessels.self.${metaPath}`) as Record<string, unknown>) ?? {}
+        (getMetadata(`vessels.self.${metaPath}`) as Record<string, unknown>) ??
+        {}
       delete fullMeta[name]
 
       app.config.baseDeltaEditor.setMeta(context, metaPath, metaValue)
@@ -253,7 +266,8 @@ export function start(app: PutApp): void {
       metaPath = parts.slice(0, parts.length - 1).join('.')
 
       fullMeta =
-        (getMetadata(`vessels.self.${metaPath}`) as Record<string, unknown>) ?? {}
+        (getMetadata(`vessels.self.${metaPath}`) as Record<string, unknown>) ??
+        {}
       const metaValue = app.config.baseDeltaEditor.getMeta(context, metaPath)
 
       if (!metaValue) {
@@ -384,7 +398,11 @@ export function deletePath(
       updateCb
     )
       .then((request) => {
-        if (req && app.securityStrategy.shouldAllowPut(req, context, null, path) === false) {
+        if (
+          req &&
+          app.securityStrategy.shouldAllowPut(req, context, null, path) ===
+            false
+        ) {
           updateRequest(request.requestId, 'COMPLETED', { statusCode: 403 })
             .then(resolve)
             .catch(reject)
@@ -414,7 +432,11 @@ export function deletePath(
           Promise.resolve(actionResult)
             .then((result) => {
               debug('got result: %j', result)
-              updateRequest(request.requestId, toRequestState(result.state), result)
+              updateRequest(
+                request.requestId,
+                toRequestState(result.state),
+                result
+              )
                 .then((reply) => {
                   if (reply.state === 'PENDING') {
                     // backwards compatibility
@@ -473,7 +495,11 @@ export function putPath(
       updateCb
     )
       .then((request) => {
-        if (req && app.securityStrategy.shouldAllowPut(req, context, null, path) === false) {
+        if (
+          req &&
+          app.securityStrategy.shouldAllowPut(req, context, null, path) ===
+            false
+        ) {
           updateRequest(request.requestId, 'COMPLETED', { statusCode: 403 })
             .then(resolve)
             .catch(reject)
@@ -540,7 +566,11 @@ export function putPath(
             .then((result) => {
               debug('got result: %j', result)
               fixReply(result)
-              updateRequest(request.requestId, toRequestState(result.state), result)
+              updateRequest(
+                request.requestId,
+                toRequestState(result.state),
+                result
+              )
                 .then((reply) => {
                   if (reply.state === 'PENDING') {
                     // backwards compatibility
@@ -561,9 +591,18 @@ export function putPath(
                 .then(resolve)
                 .catch(reject)
             })
-        } else if (app.interfaces.ws && app.interfaces.ws.canHandlePut(path, body.source)) {
+        } else if (
+          app.interfaces.ws &&
+          app.interfaces.ws.canHandlePut(path, body.source)
+        ) {
           app.interfaces.ws
-            .handlePut(request.requestId, context, path, body.source, body.value)
+            .handlePut(
+              request.requestId,
+              context,
+              path,
+              body.source,
+              body.value
+            )
             .then(resolve)
             .catch(reject)
         } else {

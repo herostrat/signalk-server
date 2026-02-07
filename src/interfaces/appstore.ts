@@ -12,13 +12,15 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
-*/
+ */
 
 import _ from 'lodash'
 import { gt } from 'semver'
 
 import { createDebug } from '../debug'
 import { SERVERROUTESPREFIX } from '../constants'
+import * as modules from '../modules'
+import * as categories from '../categories'
 
 type ModulesApi = {
   findModulesWithKeyword: (keyword: string) => Promise<RegistryModule[]>
@@ -40,7 +42,10 @@ type ModulesApi = {
     done: (code: number) => void
   ) => void
   isTheServerModule: (name: string, config: AppLike['config']) => boolean
-  getAuthor: (pkg: { name: string; publisher?: { username?: string } }) => string
+  getAuthor: (pkg: {
+    name: string
+    publisher?: { username?: string }
+  }) => string
   getKeywords: (pkg: { name: string; keywords: string[] }) => string[]
 }
 
@@ -48,9 +53,6 @@ type CategoriesApi = {
   getCategories: (pkg: ModulePackage) => string[]
   getAvailableCategories: () => string[]
 }
-
-const modules = require('../modules') as ModulesApi
-const categories = require('../categories') as CategoriesApi
 
 const {
   findModulesWithKeyword,
@@ -60,9 +62,10 @@ const {
   removeModule,
   getAuthor,
   getKeywords
-} = modules
+} = modules as unknown as ModulesApi
 
-const { getAvailableCategories, getCategories } = categories
+const { getAvailableCategories, getCategories } =
+  categories as unknown as CategoriesApi
 
 const debug = createDebug('signalk-server:interfaces:appstore')
 
@@ -484,14 +487,16 @@ const appstore = (app: AppLike): AppStoreController => {
 
   function sendAppStoreChangedEvent() {
     findPluginsAndWebapps().then(([plugins, webapps]) => {
-      getLatestServerVersion(app.config.version).then((serverVersion: string) => {
-        const result = getAllModuleInfo(plugins, webapps, serverVersion)
-        app.emit('serverevent', {
-          type: 'APP_STORE_CHANGED',
-          from: 'signalk-server',
-          data: result
-        })
-      })
+      getLatestServerVersion(app.config.version).then(
+        (serverVersion: string) => {
+          const result = getAllModuleInfo(plugins, webapps, serverVersion)
+          app.emit('serverevent', {
+            type: 'APP_STORE_CHANGED',
+            from: 'signalk-server',
+            data: result
+          })
+        }
+      )
     })
   }
 
@@ -518,7 +523,11 @@ const appstore = (app: AppLike): AppStoreController => {
     updateSKModule(module, null, true)
   }
 
-  function updateSKModule(module: string, version: string | null, isRemove: boolean) {
+  function updateSKModule(
+    module: string,
+    version: string | null,
+    isRemove: boolean
+  ) {
     moduleInstalling = {
       name: module,
       output: [],

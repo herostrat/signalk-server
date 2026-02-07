@@ -14,9 +14,11 @@
  * limitations under the License.
  */
 
+import * as cookie from 'cookie'
 import { EventEmitter } from 'events'
 import _ from 'lodash'
 import { JsonWebTokenError, TokenExpiredError } from 'jsonwebtoken'
+import PrimusModule from 'primus'
 
 import { createDebug } from '../debug'
 import * as ports from '../ports'
@@ -31,7 +33,7 @@ import {
 } from '../LatestValuesAccumulator'
 import type { WithConfig } from '../app'
 
-const cookie = require('cookie') as {
+const cookieParser = cookie as {
   parse: (value: string) => Record<string, string>
 }
 
@@ -123,7 +125,10 @@ type HistoryOptions = {
 }
 
 type HistoryProvider = {
-  hasAnyData: (options: HistoryOptions, cb: (hasResults: boolean) => void) => void
+  hasAnyData: (
+    options: HistoryOptions,
+    cb: (hasResults: boolean) => void
+  ) => void
   streamHistory: (
     spark: Spark,
     options: HistoryOptions,
@@ -196,8 +201,13 @@ type Spark = EventEmitter & {
 }
 
 type PrimusInstance = {
-  authorize: (handler: (req: WsRequest, cb: (error?: unknown) => void) => void) => void
-  on: (event: 'connection' | 'disconnection', handler: (spark: Spark) => void) => void
+  authorize: (
+    handler: (req: WsRequest, cb: (error?: unknown) => void) => void
+  ) => void
+  on: (
+    event: 'connection' | 'disconnection',
+    handler: (spark: Spark) => void
+  ) => void
   forEach: (handler: (spark: Spark) => void) => void
   destroy: (opts: { close: boolean; timeout: number }) => void
 }
@@ -215,7 +225,9 @@ type RequestRecord = {
 }
 
 type RequestResponseApi = {
-  findRequest: (predicate: (req: RequestRecord) => boolean) => RequestRecord | undefined
+  findRequest: (
+    predicate: (req: RequestRecord) => boolean
+  ) => RequestRecord | undefined
   updateRequest: (
     requestId: string,
     state: string,
@@ -243,7 +255,7 @@ type DeletePath = (
   cb: (reply: PutReply) => void
 ) => Promise<unknown>
 
-const Primus = require('primus') as PrimusCtor
+const Primus = PrimusModule as unknown as PrimusCtor
 
 const debug = createDebug('signalk-server:interfaces:ws')
 const debugConnection = createDebug('signalk-server:interfaces:ws:connections')
@@ -254,15 +266,18 @@ const requestResponseApi = {
   queryRequest
 } as RequestResponseApi
 
-const { findRequest: findWsRequest, updateRequest: updateWsRequest, queryRequest: queryWsRequest } =
-  requestResponseApi
+const {
+  findRequest: findWsRequest,
+  updateRequest: updateWsRequest,
+  queryRequest: queryWsRequest
+} = requestResponseApi
 
-const { putPath: putPathFn, deletePath: deletePathFn } = ({
+const { putPath: putPathFn, deletePath: deletePathFn } = {
   putPath,
   deletePath
-} as unknown) as { putPath: PutPath; deletePath: DeletePath }
+} as unknown as { putPath: PutPath; deletePath: DeletePath }
 
-const requestAccessFn = (requestAccess as unknown) as (
+const requestAccessFn = requestAccess as unknown as (
   app: AppLike,
   msg: WsMessage,
   ipAddress: string,
@@ -728,8 +743,7 @@ const ws = (app: AppLike) => {
             app.securityStrategy.authorizeWS?.(spark.request)
             if (spark.request.skPrincipal?.identifier) {
               spark.request.source =
-                'ws.' +
-                spark.request.skPrincipal.identifier.replace(/\./g, '_')
+                'ws.' + spark.request.skPrincipal.identifier.replace(/\./g, '_')
             }
           }
         }
@@ -792,13 +806,15 @@ function createPrimusAuthorize(authorizeWS?: (req: WsRequest) => void) {
     try {
       // can't do primus.use for cookies because it will come after authorized
       if (req.headers.cookie) {
-        req.cookies = cookie.parse(req.headers.cookie)
+        req.cookies = cookieParser.parse(req.headers.cookie)
       }
 
       authorizeWS?.(req)
       authorized()
 
-      const identifier = _.get(req, 'skPrincipal.identifier') as string | undefined
+      const identifier = _.get(req, 'skPrincipal.identifier') as
+        | string
+        | undefined
       if (identifier) {
         debug(`authorized username: ${identifier}`)
         req.source = 'ws.' + identifier.replace(/\./g, '_')
@@ -881,7 +897,10 @@ function processUpdates(
   AIS targets will stay forever, so implement a simple total purge. This may cause
   some thrashing, but is better than not sharing the values.
 */
-let canonical_meta_contextpath_values: Record<string, Record<string, string>> = {}
+let canonical_meta_contextpath_values: Record<
+  string,
+  Record<string, string>
+> = {}
 const getContextPathMetaKey = (context: string, path: string) => {
   const contextPaths =
     canonical_meta_contextpath_values[context] ||
@@ -963,7 +982,11 @@ function processSubscribe(
   msg: WsMessage
 ) {
   const subscribe = msg.subscribe as Array<{ path?: string }> | undefined
-  if (Array.isArray(subscribe) && subscribe.length > 0 && subscribe[0].path === 'log') {
+  if (
+    Array.isArray(subscribe) &&
+    subscribe.length > 0 &&
+    subscribe[0].path === 'log'
+  ) {
     if (!spark.logUnsubscribe) {
       spark.logUnsubscribe = startServerLog(app, spark)
     }
@@ -1233,7 +1256,10 @@ function getAssertBufferSize(config: AppLike['config']) {
         )
         spark.bufferSizeExceeded = Date.now()
       }
-      if (Date.now() - spark.bufferSizeExceeded > Number(MAXSENDBUFFERCHECKTIME)) {
+      if (
+        Date.now() - spark.bufferSizeExceeded >
+        Number(MAXSENDBUFFERCHECKTIME)
+      ) {
         spark.end({
           errorMessage:
             'Server outgoing buffer overflow, terminating connection'

@@ -8,10 +8,7 @@ import { WithSecurityStrategy } from './security'
 import { IRouter } from 'express'
 
 export interface ServerApp
-  extends ServerAPI,
-    WithSecurityStrategy,
-    IRouter,
-    WithConfig {
+  extends ServerAPI, WithSecurityStrategy, IRouter, WithConfig {
   started: boolean
   interfaces: { [key: string]: any }
   intervals: NodeJS.Timeout[]

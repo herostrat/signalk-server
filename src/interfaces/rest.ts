@@ -14,6 +14,7 @@
  * limitations under the License.
 */
 
+import packageInfo from '../../package.json'
 import express from 'express'
 
 import { createDebug } from '../debug'
@@ -82,7 +83,7 @@ const rest = (app: AppLike) => {
       app.use('/', express.static(__dirname + '/../../public'))
 
       app.get(apiPathPrefix + '*', (req, res, next) => {
-        let path = String(req.path || '').replace(apiPathPrefix, '')
+        const path = String(req.path || '').replace(apiPathPrefix, '')
 
         if (path === 'self') {
           return res.json(`vessels.${app.selfId}`)
@@ -231,7 +232,6 @@ const rest = (app: AppLike) => {
   }
 }
 
-const getVersion = () =>
-  (require('../../package.json') as { version: string }).version
+const getVersion = () => packageInfo.version
 
 export = rest
