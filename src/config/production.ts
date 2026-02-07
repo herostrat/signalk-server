@@ -6,7 +6,7 @@
  * You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
-
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -14,16 +14,24 @@
  * limitations under the License.
 */
 
-const { isUndefined } = require('lodash')
+import { isUndefined } from 'lodash'
 
-module.exports = function (app) {
-  'use strict'
+type AppLike = {
+  config: {
+    environment?: string
+    debug?: boolean
+    settings: { accessLogging?: boolean }
+  }
+  get: (key: string) => string
+  use: (middleware: unknown) => void
+}
 
+const production = (app: AppLike) => {
   if (app.get('env') === 'production') {
     app.config.environment = 'production'
     app.config.debug = false
 
-    const morganOptions = {}
+    const morganOptions: { skip?: () => boolean } = {}
     const accessLogging =
       isUndefined(app.config.settings.accessLogging) ||
       app.config.settings.accessLogging
@@ -34,3 +42,5 @@ module.exports = function (app) {
     app.use(require('errorhandler')())
   }
 }
+
+export = production
